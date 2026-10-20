@@ -68,7 +68,23 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
     private val io = Executors.newSingleThreadExecutor()
     private val tv = TvControls(ctx)
     private val ticker = object : Runnable {
-        override fun run() { updateClock(); host.postDelayed(this, 15_000) }
+        override fun run() {
+            updateClock()
+            followVolume()
+            host.postDelayed(this, if (isOpen) 2_000 else 15_000)
+        }
+    }
+
+    /** Keeps the volume slider in step with the remote's own volume keys while the panel is open. */
+    private fun followVolume() {
+        if (!isOpen) return
+        io.execute {
+            val v = tv.volume() ?: return@execute
+            host.post {
+                // Do not fight a slider the user is holding; only follow outside the panel's own input.
+                if (isOpen && !volume.hasFocus()) volume.set(v)
+            }
+        }
     }
 
     var isOpen = false
@@ -103,9 +119,11 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
             leftMargin = -ctx.dp(6); rightMargin = -ctx.dp(6)
         })
 
-        brightness = Slider(R.drawable.ic_sun, "亮度") { v -> tv.setBrightness(v) }.also { focusables += it }
-        panel.addView(brightness, LinearLayout.LayoutParams(-1, ctx.dp(54)).apply { topMargin = ctx.dp(6) })
-        volume = Slider(R.drawable.ic_volume, "音量") { v -> tv.setVolume(volumeTarget, v) }.also { focusables += it }
+        // Shown only where a real backlight level can be read and set (Sony); on TCL the slider
+        // would only open the maker's settings panel and show a made-up level, so it stays hidden.
+        brightness = Slider(R.drawable.ic_sun, "亮度") { v -> tv.setBrightness(v) }
+        brightness.visibility = View.GONE
+        volume = Slider(R.drawable.ic_volume, "音量", perPress = 2) { v -> tv.setVolume(volumeTarget, v) }.also { focusables += it }
         panel.addView(volume, LinearLayout.LayoutParams(-1, ctx.dp(54)).apply { topMargin = ctx.dp(12) })
 
         inputModule = Module(R.drawable.ic_input, Color.rgb(10, 132, 255), "输入源") { pickInput() }.also { focusables += it }
@@ -316,7 +334,12 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
      * iOS-style capsule slider: the white fill is the value. Left/right change it,
      * and the TV is updated a moment after the last key press.
      */
-    private inner class Slider(icon: Int, label: String, private val send: (Int) -> Unit) : FrameLayout(ctx) {
+    private inner class Slider(
+        icon: Int,
+        label: String,
+        private val perPress: Int = 0,
+        private val send: (Int) -> Unit,
+    ) : FrameLayout(ctx) {
         private val corner = ctx.dp(27).toFloat()
         private val fill = View(ctx)
         private val img = ImageView(ctx).apply { setImageResource(icon) }
@@ -347,7 +370,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
                 if (code != KeyEvent.KEYCODE_DPAD_LEFT && code != KeyEvent.KEYCODE_DPAD_RIGHT) return@setOnKeyListener false
                 if (e.action == KeyEvent.ACTION_DOWN && ready) {
                     val dir = if (code == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1
-                    val step = ((max - min) / 25).coerceAtLeast(1)
+                    val step = if (perPress > 0) perPress else ((max - min) / 25).coerceAtLeast(1)
                     val nv = (value + dir * step).coerceIn(min, max)
                     if (nv == value) {
                         if (e.repeatCount == 0) Motion.bump(this, dir, 0)
@@ -443,7 +466,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
             val cur = tv.currentInput()
             host.post {
                 brightness.set(b)
-                brightness.visibility = if (b == null) View.GONE else View.VISIBLE
+                brightness.visibility = if (tv.canSetBacklight) View.VISIBLE else View.GONE
                 v?.target?.takeIf { it.isNotEmpty() }?.let { volumeTarget = it }
                 volume.set(v)
                 inputs = list

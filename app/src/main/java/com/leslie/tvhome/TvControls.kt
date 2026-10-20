@@ -26,6 +26,12 @@ class TvControls(private val ctx: Context) {
     /** The backlight has no standard Android API, so this is null (and the slider hidden) off Sony TVs. */
     fun brightness(): Bravia.Level? = Bravia.brightness() ?: Tcl.brightness(ctx)
 
+    /**
+     * True only where the level can actually be read and set, i.e. Sony. TCL returns null from
+     * [brightness], so its slider stays hidden rather than showing a level it cannot change.
+     */
+    val canSetBacklight: Boolean get() = brightness() != null
+
     fun setBrightness(v: Int) {
         if (Bravia.brightness() != null) { Bravia.setBrightness(v); return }
         Tcl.setBrightness(ctx)
@@ -110,9 +116,11 @@ private object Tcl {
     private fun installed(ctx: Context, pkg: String) =
         runCatching { ctx.packageManager.getPackageInfo(pkg, 0); true }.getOrDefault(false)
 
-    /** Non-null makes the brightness slider appear; the slider then only opens TCL's own panel. */
-    fun brightness(ctx: Context): Bravia.Level? =
-        if (installed(ctx, SETTINGS_PKG)) Bravia.Level(50, 0, 100) else null
+    /**
+     * TCL has no backlight API to read or set, so this returns null and the slider stays hidden.
+     * [TvControls.settingsIntent] still reaches TCL's settings panel, which is where the backlight is.
+     */
+    fun brightness(ctx: Context): Bravia.Level? = null
 
     fun setBrightness(ctx: Context) {
         start(ctx, Intent(Intent.ACTION_MAIN).setComponent(ComponentName(SETTINGS_PKG, "$SETTINGS_PKG.ui.MainActivity")))
