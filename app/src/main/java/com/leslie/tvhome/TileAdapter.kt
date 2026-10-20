@@ -10,6 +10,7 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.TextView
+import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.RecyclerView
 import java.util.concurrent.Executors
 
@@ -125,9 +126,20 @@ class TileAdapter(
     var lastDx = 0
     var lastDy = 0
 
-    fun submit(list: List<AppEntry>) {
+    /**
+     * Updates only the tiles that changed, so a package event doesn't rebind
+     * (and blank) the whole grid. [changed] is redrawn even if its entry is equal.
+     */
+    fun submit(list: List<AppEntry>, changed: String? = null) {
+        val old = apps
+        val diff = DiffUtil.calculateDiff(object : DiffUtil.Callback() {
+            override fun getOldListSize() = old.size
+            override fun getNewListSize() = list.size
+            override fun areItemsTheSame(o: Int, n: Int) = old[o].pkg == list[n].pkg
+            override fun areContentsTheSame(o: Int, n: Int) = old[o] == list[n] && list[n].pkg != changed
+        })
         apps = list.toMutableList()
-        notifyDataSetChanged()
+        diff.dispatchUpdatesTo(this)
     }
 
     fun move(from: Int, to: Int) {
@@ -166,13 +178,15 @@ class TileAdapter(
         val app = apps[position]
         val cell = h.cell
         cell.label.text = app.label
+        val same = cell.tag == app.pkg
         cell.tag = app.pkg
         cell.setJiggle(app.pkg == movingPkg)
         val cached = repo.cachedTile(app.pkg)
         if (cached != null) {
             cell.image.setImageBitmap(cached)
         } else {
-            cell.image.setImageDrawable(null)
+            // Rebinding the same app keeps its old picture until the new one is ready.
+            if (!same) cell.image.setImageDrawable(null)
             loader.execute {
                 val bmp = repo.tile(app)
                 cell.post { if (cell.tag == app.pkg) cell.image.setImageBitmap(bmp) }

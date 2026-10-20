@@ -105,7 +105,6 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     private lateinit var shelfMeta: TextView
     private lateinit var shelfInfo: LinearLayout
     private lateinit var shelfDots: LinearLayout
-    private val shelfScrim = ShelfScrim()
     private val net = Executors.newFixedThreadPool(2)
     private var shelfPkg: String? = null
     private var pendingShelf: String? = null
@@ -138,8 +137,9 @@ class HomeActivity : Activity(), TileAdapter.Listener {
 
     private val pkgReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
-            repo.invalidate()
-            reload()
+            val pkg = i.data?.schemeSpecificPart
+            repo.invalidate(pkg)
+            reload(pkg)
         }
     }
 
@@ -271,6 +271,8 @@ class HomeActivity : Activity(), TileAdapter.Listener {
             }
         }
         grid.adapter = adapter
+        // Tiles update in place; the default cross-fade would swap in a second view and drop focus.
+        (grid.itemAnimator as? androidx.recyclerview.widget.SimpleItemAnimator)?.supportsChangeAnimations = false
         grid.addItemDecoration(object : RecyclerView.ItemDecoration() {
             override fun getItemOffsets(out: Rect, view: View, parent: RecyclerView, state: RecyclerView.State) {
                 val col = parent.getChildAdapterPosition(view) % cols
@@ -312,7 +314,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
                 if (photo == null && walls.files().isNotEmpty()) main.post { shownBackground = null; applyBackground() }
             }
             val bmp = photo?.let { walls.forHome(it) } ?: Backgrounds.render(if (theme == "daily") "green" else theme)
-            val glass = LiquidGlass.bake(bmp, sw, sh, dockRect, dockRadius)
+            val glass = LiquidGlass.bake(bmp, sw, sh, dockRect, dockRadius).also { it.prepareToDraw() }
             homeDock = glass
             main.post {
                 if (!shelfShown) setDock(glass, 1200)
@@ -352,7 +354,6 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         shelf = FrameLayout(this).apply { alpha = 0f; visibility = View.INVISIBLE }
         shelfPics = FrameLayout(this)
         shelf.addView(shelfPics, FrameLayout.LayoutParams(-1, -1))
-        shelf.addView(View(this).apply { background = shelfScrim }, FrameLayout.LayoutParams(-1, -1))
         val shadow = { t: TextView -> t.setShadowLayer(dp(10).toFloat(), 0f, dp(1).toFloat(), Color.argb(150, 0, 0, 0)) }
         shelfSource = text(16f, Color.argb(200, 255, 255, 255), weight = 600).also(shadow)
         shelfTitle = text(38f, weight = 700).apply {
@@ -422,7 +423,8 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         // The dock refracts the new picture.
         val pkg = shelfPkg
         io.execute {
-            val glass = LiquidGlass.bake(b, sw, sh, dockRect, dockRadius, ShelfScrim())
+            // The picture already carries the scrim (see Shelf.darken).
+            val glass = LiquidGlass.bake(b, sw, sh, dockRect, dockRadius).also { it.prepareToDraw() }
             main.post { if (shelfShown && shelfPkg == pkg && shelfIndex == i) setDock(glass, 600) }
         }
         // Fetch the next picture ahead of time.
@@ -432,10 +434,12 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     private fun setShelfVisible(v: Boolean) {
         if (v == shelfShown) return
         shelfShown = v
-        if (v) shelf.visibility = View.VISIBLE
+        if (v) shelf.visibility = View.VISIBLE else bg.visibility = View.VISIBLE
         shelf.animate().cancel()
         shelf.animate().alpha(if (v) 1f else 0f).setDuration(if (v) 500 else 350)
             .withEndAction {
+                // The shelf covers the whole screen: stop drawing the photo underneath it.
+                if (shelfShown) bg.visibility = View.INVISIBLE
                 if (!shelfShown) {
                     shelf.visibility = View.INVISIBLE
                     shelfPics.removeAllViews()
@@ -478,12 +482,12 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         netButton.alpha = if (caps == null) 0.4f else 1f
     }
 
-    private fun reload() {
+    private fun reload(changed: String? = null) {
         io.execute {
             val list = repo.orderedVisible()
             main.post {
                 val focusedPkg = adapter.apps.getOrNull(focusedPos)?.pkg
-                adapter.submit(list)
+                adapter.submit(list, changed)
                 val idx = list.indexOfFirst { it.pkg == focusedPkg }.coerceAtLeast(0)
                 grid.post {
                     // On first show the header buttons grab default focus; the grid should have it.
@@ -655,7 +659,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         val pos = moving
         moving = -1
         adapter.movingPkg = null
-        adapter.notifyDataSetChanged()
+        adapter.notifyItemChanged(pos)
         prefs.order = adapter.apps.map { it.pkg }
         grid.post { focusAt(pos) }
     }

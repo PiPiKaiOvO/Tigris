@@ -57,6 +57,20 @@ object Shelf {
         }
         return BitmapFactory.decodeFile(f.path, BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 })
             ?.let(::trimBars)
+            ?.let(::darken)
+            // Start the GPU upload now, off the frame that first shows it.
+            ?.also { it.prepareToDraw() }
+    }
+
+    /**
+     * Bakes the scrim that keeps the title readable into the picture itself:
+     * a full-screen gradient layer on top would cost the TV's GPU three more
+     * full-screen passes on every frame of a cross-fade.
+     */
+    private fun darken(b: Bitmap): Bitmap {
+        val out = if (b.isMutable) b else b.copy(Bitmap.Config.ARGB_8888, true).also { b.recycle() }
+        ShelfScrim().apply { setBounds(0, 0, out.width, out.height) }.draw(android.graphics.Canvas(out))
+        return out
     }
 
     /** Live-stream covers are often letterboxed; cut the black bars so the picture fills the screen. */

@@ -115,7 +115,8 @@ class AppRepo(private val ctx: Context) {
         return bmp
     }
 
-    fun invalidate() = tiles.evictAll()
+    /** Drops the cached tile of [pkg] (it was updated or removed), or of every app. */
+    fun invalidate(pkg: String? = null) { if (pkg == null) tiles.evictAll() else tiles.remove(pkg) }
 
     private fun drawCenterCrop(c: Canvas, d: Drawable) {
         val iw = d.intrinsicWidth.takeIf { it > 0 } ?: TILE_W
