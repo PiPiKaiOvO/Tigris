@@ -1,0 +1,225 @@
+package com.leslie.tvhome
+
+import android.app.Activity
+import android.content.Intent
+import android.graphics.Color
+import android.os.Bundle
+import android.provider.Settings
+import android.view.Gravity
+import android.view.KeyEvent
+import android.view.View
+import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
+import android.widget.Toast
+
+/**
+ * tvOS-style settings: a large icon on the left, a list of rows on the
+ * right. Sub-pages (keep list, hidden apps) reuse the same list.
+ */
+class SettingsActivity : Activity() {
+    companion object {
+        const val SONY_DREAM = "com.sony.dtv.braviashow/com.sony.dtv.braviashow.BraviaDayDreamService"
+    }
+
+    private lateinit var prefs: Prefs
+    private lateinit var repo: AppRepo
+    private lateinit var list: LinearLayout
+    private lateinit var heading: TextView
+    private lateinit var scroll: ScrollView
+    private var page = Page.MAIN
+
+    private enum class Page { MAIN, KEEP, HIDDEN }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        prefs = Prefs(this)
+        repo = AppRepo(this)
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(Color.rgb(16, 16, 18))
+        }
+        val left = FrameLayout(this)
+        left.addView(ImageView(this).apply {
+            setImageResource(R.drawable.ic_gear)
+            setColorFilter(Color.argb(200, 255, 255, 255))
+        }, FrameLayout.LayoutParams(dp(170), dp(170), Gravity.CENTER))
+        root.addView(left, LinearLayout.LayoutParams(0, -1, 1f))
+
+        val right = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(48), dp(56), dp(24))
+        }
+        heading = text(26f, bold = true)
+        right.addView(heading, LinearLayout.LayoutParams(-2, -2).apply { bottomMargin = dp(22); marginStart = dp(16) })
+        list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        scroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            clipToPadding = false
+            setPadding(dp(10), dp(6), dp(10), dp(40))
+            addView(list)
+        }
+        right.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        root.addView(right, LinearLayout.LayoutParams(0, -1, 1.15f))
+        setContentView(root)
+        show(Page.MAIN)
+    }
+
+    private fun show(p: Page, focusIndex: Int = 0) {
+        page = p
+        list.removeAllViews()
+        when (p) {
+            Page.MAIN -> main()
+            Page.KEEP -> appPicker("释放内存时保留", prefs.keep) { pkg, on ->
+                prefs.keep = if (on) prefs.keep + pkg else prefs.keep - pkg
+            }
+            Page.HIDDEN -> appPicker("隐藏的 App", prefs.hidden, includeHidden = true) { pkg, on ->
+                prefs.hidden = if (on) prefs.hidden + pkg else prefs.hidden - pkg
+            }
+        }
+        list.post { list.getChildAt(focusIndex.coerceAtMost(list.childCount - 1))?.requestFocus() }
+    }
+
+    private fun main() {
+        heading.text = "主屏幕设置"
+        row("待机时自动释放内存", { onOff(prefs.cleanOnStandby) }) { prefs.cleanOnStandby = !prefs.cleanOnStandby }
+        row("定时释放内存", { if (prefs.cleanIntervalHours == 0) "关闭" else "每 ${prefs.cleanIntervalHours} 小时" }) {
+            val opts = listOf(0, 2, 4, 8)
+            prefs.cleanIntervalHours = opts[(opts.indexOf(prefs.cleanIntervalHours) + 1) % opts.size]
+            KeeperService.start(this, KeeperService.ACTION_RESCHEDULE)
+        }
+        row("按遥控器电源键时", { if (prefs.shutdownOnPowerKey) "彻底关机" else "待机" }) {
+            prefs.shutdownOnPowerKey = !prefs.shutdownOnPowerKey
+            if (prefs.shutdownOnPowerKey && !prefs.adbAuthorized)
+                Toast.makeText(this, "需要先授权本机调试才会生效", Toast.LENGTH_LONG).show()
+        }
+        row("释放内存时保留的 App", { "${prefs.keep.size} 个" }) { show(Page.KEEP) }
+        row("立即释放内存", { "可用 ${Cleaner.availMb(this)} MB" }) { v ->
+            v.text = "正在释放…"
+            Thread {
+                val r = Cleaner.clean(applicationContext)
+                runOnUiThread { v.text = "已释放 ${r.freedMb} MB" }
+            }.start()
+        }
+        row("隐藏的 App", { "${prefs.hidden.size} 个" }) { show(Page.HIDDEN) }
+        row("背景", { Backgrounds.THEMES[prefs.background]?.first ?: "风景照片（自动更换）" }) {
+            val keys = listOf("daily") + Backgrounds.THEMES.keys.toList()
+            prefs.background = keys[(keys.indexOf(prefs.background) + 1) % keys.size]
+        }
+        row("照片更换频率", { minutesLabel(prefs.wallMinutes) }) {
+            val opts = listOf(15, 30, 60, 180, 1440)
+            prefs.wallMinutes = opts[(opts.indexOf(prefs.wallMinutes) + 1) % opts.size]
+        }
+        row("立即更新照片", { "已有 ${Wallpapers(this).files().size} 张" }) { v ->
+            v.text = "正在下载…"
+            Thread {
+                val w = Wallpapers(applicationContext)
+                w.refresh(force = true)
+                runOnUiThread { v.text = "已有 ${w.files().size} 张" }
+            }.start()
+        }
+        row("电视空闲时显示相框", { onOff(prefs.frameScreensaver) }) { v ->
+            val on = !prefs.frameScreensaver
+            val comp = if (on) "$packageName/.PhotoDream" else SONY_DREAM
+            v.text = "正在设置…"
+            Thread {
+                val ok = LocalAdb.shell(applicationContext,
+                    "settings put secure screensaver_components $comp; settings put secure screensaver_enabled 1") != null
+                if (ok) prefs.frameScreensaver = on
+                runOnUiThread { v.text = if (ok) onOff(prefs.frameScreensaver) else "需要先授权本机调试" }
+            }.start()
+        }
+        row("空闲多久显示相框", { minutesLabel(idleMinutes()) }) { v ->
+            val opts = listOf(5, 10, 15, 30)
+            val next = opts[(opts.indexOf(idleMinutes()) + 1) % opts.size]
+            v.text = "正在设置…"
+            Thread {
+                val ok = LocalAdb.shell(applicationContext, "settings put system screen_off_timeout ${next * 60_000}") != null
+                runOnUiThread { v.text = if (ok) minutesLabel(next) else "需要先授权本机调试" }
+            }.start()
+        }
+        row("相框每张照片停留", { "${prefs.frameSeconds} 秒" }) {
+            val opts = listOf(15, 30, 60, 120)
+            prefs.frameSeconds = opts[(opts.indexOf(prefs.frameSeconds) + 1) % opts.size]
+        }
+        row("本机调试授权", { if (prefs.adbAuthorized) "已授权" else "未授权，按确认键授权" }) { v ->
+            v.text = "请在弹窗中选择“始终允许”"
+            Thread {
+                val ok = LocalAdb.shell(applicationContext, "echo ok", 60_000) != null
+                runOnUiThread { v.text = if (ok) "已授权" else "未授权，按确认键重试" }
+            }.start()
+        }
+        row("系统设置", { "" }) { startActivity(Intent(Settings.ACTION_SETTINGS)) }
+        row("关于", { "主屏幕 " + packageManager.getPackageInfo(packageName, 0).versionName }) {}
+    }
+
+    private fun appPicker(title: String, selected: Set<String>, includeHidden: Boolean = false, toggle: (String, Boolean) -> Unit) {
+        heading.text = title
+        val apps = if (includeHidden) repo.allApps().sortedBy { it.label } else repo.allApps().filter { !repo.isSystem(it.pkg) }.sortedBy { it.label }
+        val sel = selected.toMutableSet()
+        for (a in apps) {
+            row(a.label, { if (a.pkg in sel) "✓" else "" }) { v ->
+                val on = a.pkg !in sel
+                if (on) sel += a.pkg else sel -= a.pkg
+                toggle(a.pkg, on)
+                v.text = if (on) "✓" else ""
+            }
+        }
+    }
+
+    /** One settings row; [value] is re-read after each click. */
+    private fun row(label: String, value: () -> String, onClick: (TextView) -> Unit) {
+        val r = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            isFocusable = true
+            isClickable = true
+            setPadding(dp(20), 0, dp(20), 0)
+        }
+        val l = text(17f, bold = true).apply { text = label }
+        val v = text(16f, Color.argb(150, 255, 255, 255)).apply { text = value() }
+        r.addView(l, LinearLayout.LayoutParams(0, -2, 1f))
+        r.addView(v)
+        val idle = rounded(Color.TRANSPARENT, dp(12).toFloat())
+        val focus = rounded(Color.WHITE, dp(12).toFloat())
+        r.background = idle
+        r.setOnFocusChangeListener { _, f ->
+            r.background = if (f) focus else idle
+            l.setTextColor(if (f) Color.BLACK else Color.WHITE)
+            v.setTextColor(if (f) Color.argb(150, 0, 0, 0) else Color.argb(150, 255, 255, 255))
+            r.animate().scaleX(if (f) 1.03f else 1f).scaleY(if (f) 1.03f else 1f)
+                .translationZ(if (f) dp(8).toFloat() else 0f).setDuration(150).start()
+        }
+        r.setOnClickListener {
+            onClick(v)
+            if (page == Page.MAIN && !v.text.startsWith("正在") && !v.text.startsWith("请在")) v.text = value()
+        }
+        list.addView(r, LinearLayout.LayoutParams(-1, dp(54)).apply { bottomMargin = dp(6) })
+    }
+
+    private fun onOff(b: Boolean) = if (b) "开" else "关"
+
+    private fun minutesLabel(m: Int) = when {
+        m >= 1440 -> "每天"
+        m >= 60 -> "${m / 60} 小时"
+        else -> "$m 分钟"
+    }
+
+    /** On Android TV the screensaver starts after the "screen off" timeout. */
+    private fun idleMinutes() = Settings.System.getInt(contentResolver, Settings.System.SCREEN_OFF_TIMEOUT, 600_000) / 60_000
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_BACK && page != Page.MAIN) {
+            val back = if (page == Page.KEEP) 3 else 5
+            show(Page.MAIN, back)
+            return true
+        }
+        return super.onKeyUp(keyCode, event)
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
+        if (keyCode == KeyEvent.KEYCODE_BACK && page != Page.MAIN) true else super.onKeyDown(keyCode, event)
+}
