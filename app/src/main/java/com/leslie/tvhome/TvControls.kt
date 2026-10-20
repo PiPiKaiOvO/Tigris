@@ -26,12 +26,6 @@ class TvControls(private val ctx: Context) {
     /** The backlight has no standard Android API, so this is null (and the slider hidden) off Sony TVs. */
     fun brightness(): Bravia.Level? = Bravia.brightness() ?: Tcl.brightness(ctx)
 
-    /**
-     * True only where the level can actually be read and set, i.e. Sony. TCL returns null from
-     * [brightness], so its slider stays hidden rather than showing a level it cannot change.
-     */
-    val canSetBacklight: Boolean get() = brightness() != null
-
     fun setBrightness(v: Int) {
         if (Bravia.brightness() != null) { Bravia.setBrightness(v); return }
         Tcl.setBrightness(ctx)
@@ -122,18 +116,20 @@ private object Tcl {
      */
     fun brightness(ctx: Context): Bravia.Level? = null
 
+    /** TCL cannot set the backlight from an app; open its settings panel and let the user adjust it. */
     fun setBrightness(ctx: Context) {
-        start(ctx, Intent(Intent.ACTION_MAIN).setComponent(ComponentName(SETTINGS_PKG, "$SETTINGS_PKG.ui.MainActivity")))
-            ?: start(ctx, Intent(SETTINGS_PKG + ".SHOW_WINDOW").setPackage(SETTINGS_PKG))
+        val panel = Intent(Intent.ACTION_MAIN).setComponent(ComponentName(SETTINGS_PKG, "$SETTINGS_PKG.ui.MainActivity"))
+        if (!start(ctx, panel)) start(ctx, Intent(SETTINGS_PKG + ".SHOW_WINDOW").setPackage(SETTINGS_PKG))
     }
 
-    // LiveTV's source list: HDMI1-4 map to hardware types HDMI 1-4 in TvInputHardwareManager.
-    private val PORT_NAMES = listOf("HDMI1 (ARC/eARC)", "HDMI2", "HDMI3", "HDMI4")
-
+    /**
+     * One entry, not four: the firmware exposes no way to address a port directly, so claiming a
+     * per-port list would be a lie. This opens LiveTV, which shows its own picker
+     * (TV / HDMI1(ARC/eARC) / HDMI2-4 / AV / 投屏) for the user to choose from.
+     */
     fun inputs(ctx: Context): List<Bravia.Input> =
-        if (installed(ctx, LIVE_TV)) PORT_NAMES.map { Bravia.Input(URI_PREFIX + it, it, "", false) } else emptyList()
+        if (installed(ctx, LIVE_TV)) listOf(Bravia.Input(URI_PREFIX, "TCL 信号源", "", false)) else emptyList()
 
-    /** Opens LiveTV, then its own source picker (TV / HDMI1(ARC/eARC) / HDMI2-4 / AV / 投屏). */
     fun setInput(ctx: Context) {
         start(ctx, Intent(Intent.ACTION_VIEW).setComponent(ComponentName(LIVE_TV, "$LIVE_TV.TVActivity")))
     }

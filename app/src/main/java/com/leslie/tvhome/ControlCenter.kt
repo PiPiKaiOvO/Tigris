@@ -119,10 +119,10 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
             leftMargin = -ctx.dp(6); rightMargin = -ctx.dp(6)
         })
 
-        // Shown only where a real backlight level can be read and set (Sony); on TCL the slider
-        // would only open the maker's settings panel and show a made-up level, so it stays hidden.
+        // Attached for Sony, where the level can be read and set; refresh() hides it (and keeps it out
+        // of the focus ring) elsewhere, so a hidden slider can never take the initial focus.
         brightness = Slider(R.drawable.ic_sun, "亮度") { v -> tv.setBrightness(v) }
-        brightness.visibility = View.GONE
+        panel.addView(brightness, LinearLayout.LayoutParams(-1, ctx.dp(54)).apply { topMargin = ctx.dp(6) })
         volume = Slider(R.drawable.ic_volume, "音量", perPress = 2) { v -> tv.setVolume(volumeTarget, v) }.also { focusables += it }
         panel.addView(volume, LinearLayout.LayoutParams(-1, ctx.dp(54)).apply { topMargin = ctx.dp(12) })
 
@@ -466,7 +466,12 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
             val cur = tv.currentInput()
             host.post {
                 brightness.set(b)
-                brightness.visibility = if (tv.canSetBacklight) View.VISIBLE else View.GONE
+                // b was fetched on the background executor; do not call BRAVIA again here (UI thread).
+                val showBrightness = b != null
+                brightness.visibility = if (showBrightness) View.VISIBLE else View.GONE
+                val inRing = focusables.contains(brightness)
+                if (showBrightness && !inRing) focusables.add(0, brightness)
+                if (!showBrightness && inRing) focusables.remove(brightness)
                 v?.target?.takeIf { it.isNotEmpty() }?.let { volumeTarget = it }
                 volume.set(v)
                 inputs = list
