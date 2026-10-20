@@ -72,10 +72,18 @@ class AppRepo(private val ctx: Context) {
         (pm.getApplicationInfo(pkg, 0).flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
     } catch (e: PackageManager.NameNotFoundException) { false }
 
-    /** Apps the TV needs to work (settings, the TV player, inputs, launchers); never offered for deletion. */
+    /**
+     * Apps the TV needs to work (settings, the TV player, inputs, the built-in
+     * launcher); never offered for deletion. Launchers the user installed can go.
+     */
     fun isEssential(pkg: String): Boolean {
         if (pkg == ctx.packageName || pkg in ESSENTIAL) return true
+        if (!isSystem(pkg)) return false
         if (listOf(".settings", "tvinput", "launcher", "systemui", "inputmethod", ".ime").any { it in pkg.lowercase() }) return true
+        return isLauncher(pkg)
+    }
+
+    fun isLauncher(pkg: String): Boolean {
         val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
         return pm.queryIntentActivities(home, PackageManager.MATCH_DISABLED_COMPONENTS).any { it.activityInfo.packageName == pkg }
     }

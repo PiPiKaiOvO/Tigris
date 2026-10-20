@@ -579,8 +579,11 @@ class HomeActivity : Activity(), TileAdapter.Listener {
                 .button("取消") {}, restoreFocusTo = pos)
             return
         }
-        val msg = if (system) "这是电视预装的 App。删除后它不会再出现在主屏幕上，也不会在后台运行。需要时可以在“主屏幕设置 → 已删除的预装 App”里恢复。"
-            else "App 和它的数据都会被删除。"
+        val msg = when {
+            system -> "这是电视预装的 App。删除后它不会再出现在主屏幕上，也不会在后台运行。需要时可以在“主屏幕设置 → 已删除的预装 App”里恢复。"
+            repo.isLauncher(app.pkg) -> "这是一个桌面 App，可以在本桌面出问题时顶上。删除后，万一本桌面无法启动，电视就没有备用桌面了。App 和它的数据都会被删除。"
+            else -> "App 和它的数据都会被删除。"
+        }
         showSheet(Sheet(root).title("删除“${app.label}”？").message(msg)
             .button("删除") {
                 io.execute {
