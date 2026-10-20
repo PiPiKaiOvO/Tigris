@@ -662,8 +662,9 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         control.close()
         if (moving >= 0) endMove()
         focusedPos = 0
-        grid.smoothScrollToPosition(0)
-        grid.postDelayed({ focusAt(0) }, 200)
+        // Scroll by our own offset: smoothScrollToPosition aligns to the padding and leaves the grid off its resting place.
+        grid.smoothScrollBy(0, -scrollY, Motion.ease, 360)
+        grid.postDelayed({ focusAt(0) }, 400)
     }
 
     override fun onResume() {
