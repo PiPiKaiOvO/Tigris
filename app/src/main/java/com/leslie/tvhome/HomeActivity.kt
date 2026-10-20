@@ -556,11 +556,45 @@ class HomeActivity : Activity(), TileAdapter.Listener {
                 startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${app.pkg}"))
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }
-        if (!repo.isSystem(app.pkg)) s.button("删除 App") {
-            startActivity(Intent(Intent.ACTION_DELETE, Uri.parse("package:${app.pkg}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        }
+        if (!repo.isEssential(app.pkg)) s.button("删除 App") { confirmDelete(app, pos) }
         s.button("取消") {}
         showSheet(s, restoreFocusTo = pos)
+    }
+
+    /**
+     * Deletes through local adb, which also removes preinstalled apps the system
+     * won't let go of ("pm uninstall --user 0": the APK stays on the system
+     * partition, so it can be restored from settings).
+     */
+    private fun confirmDelete(app: AppEntry, pos: Int) {
+        val system = repo.isSystem(app.pkg)
+        if (!prefs.adbAuthorized) {
+            if (!system) {
+                startActivity(Intent(Intent.ACTION_DELETE, Uri.parse("package:${app.pkg}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                return
+            }
+            showSheet(Sheet(root).title("需要先授权本机调试")
+                .message("删除电视预装的 App 要用到本机调试。点“开始”后，电视会弹出“允许调试吗？”，请勾选“始终允许”，再点“允许”。")
+                .button("开始") { authorizeAdb() }
+                .button("取消") {}, restoreFocusTo = pos)
+            return
+        }
+        val msg = if (system) "这是电视预装的 App。删除后它不会再出现在主屏幕上，也不会在后台运行。需要时可以在“主屏幕设置 → 已删除的预装 App”里恢复。"
+            else "App 和它的数据都会被删除。"
+        showSheet(Sheet(root).title("删除“${app.label}”？").message(msg)
+            .button("删除") {
+                io.execute {
+                    val out = LocalAdb.shell(this, if (system) "pm uninstall -k --user 0 ${app.pkg}" else "pm uninstall ${app.pkg}", 15_000)
+                    val ok = out?.contains("Success") == true
+                    main.post {
+                        if (ok) {
+                            if (system) prefs.removed = prefs.removed + app.pkg
+                            reload()
+                        } else Toast.makeText(this, "没有删除成功：${out?.trim()?.take(80) ?: "本机调试不可用"}", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+            .button("取消") {}, restoreFocusTo = pos)
     }
 
     override fun onTileKey(pos: Int, cell: TileCell, keyCode: Int): Boolean {

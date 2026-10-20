@@ -53,6 +53,11 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("frame_screensaver", false)
         set(v) = sp.edit().putBoolean("frame_screensaver", v).apply()
 
+    /** Preinstalled apps removed for this user from the long-press menu; restorable in settings. */
+    var removed: Set<String>
+        get() = sp.getStringSet("removed", emptySet())!!.toSet()
+        set(v) = sp.edit().putStringSet("removed", v).apply()
+
     var adbAuthorized: Boolean
         get() = sp.getBoolean("adb_ok", false)
         set(v) = sp.edit().putBoolean("adb_ok", v).apply()

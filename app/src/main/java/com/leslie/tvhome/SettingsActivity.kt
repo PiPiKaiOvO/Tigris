@@ -2,6 +2,7 @@ package com.leslie.tvhome
 
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Bundle
 import android.provider.Settings
@@ -31,7 +32,7 @@ class SettingsActivity : Activity() {
     private lateinit var scroll: ScrollView
     private var page = Page.MAIN
 
-    private enum class Page { MAIN, KEEP, HIDDEN }
+    private enum class Page { MAIN, KEEP, HIDDEN, REMOVED }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -79,6 +80,7 @@ class SettingsActivity : Activity() {
             Page.HIDDEN -> appPicker("隐藏的 App", prefs.hidden, includeHidden = true) { pkg, on ->
                 prefs.hidden = if (on) prefs.hidden + pkg else prefs.hidden - pkg
             }
+            Page.REMOVED -> removedApps()
         }
         list.post { list.getChildAt(focusIndex.coerceAtMost(list.childCount - 1))?.requestFocus() }
     }
@@ -105,6 +107,7 @@ class SettingsActivity : Activity() {
             }.start()
         }
         row("隐藏的 App", { "${prefs.hidden.size} 个" }) { show(Page.HIDDEN) }
+        row("已删除的预装 App", { "${prefs.removed.size} 个" }) { show(Page.REMOVED) }
         row("背景", { Backgrounds.THEMES[prefs.background]?.first ?: "风景照片（自动更换）" }) {
             val keys = listOf("daily") + Backgrounds.THEMES.keys.toList()
             prefs.background = keys[(keys.indexOf(prefs.background) + 1) % keys.size]
@@ -170,6 +173,25 @@ class SettingsActivity : Activity() {
         }
     }
 
+    /** Preinstalled apps deleted from the long-press menu; selecting one reinstalls it from the system partition. */
+    private fun removedApps() {
+        heading.text = "已删除的预装 App"
+        if (prefs.removed.isEmpty()) row("没有已删除的 App", { "" }) {}
+        for (pkg in prefs.removed.sorted()) {
+            val label = try {
+                packageManager.getApplicationInfo(pkg, PackageManager.MATCH_UNINSTALLED_PACKAGES).loadLabel(packageManager).toString()
+            } catch (e: Exception) { pkg }
+            row(label, { "恢复" }) { v ->
+                v.text = "正在恢复…"
+                Thread {
+                    val ok = LocalAdb.shell(applicationContext, "cmd package install-existing $pkg")?.contains("installed") == true
+                    if (ok) prefs.removed = prefs.removed - pkg
+                    runOnUiThread { v.text = if (ok) "已恢复" else "恢复失败" }
+                }.start()
+            }
+        }
+    }
+
     /** One settings row; [value] is re-read after each click. */
     private fun row(label: String, value: () -> String, onClick: (TextView) -> Unit) {
         val r = LinearLayout(this).apply {
@@ -213,7 +235,7 @@ class SettingsActivity : Activity() {
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BACK && page != Page.MAIN) {
-            val back = if (page == Page.KEEP) 3 else 5
+            val back = when (page) { Page.KEEP -> 3; Page.HIDDEN -> 5; else -> 6 }
             show(Page.MAIN, back)
             return true
         }

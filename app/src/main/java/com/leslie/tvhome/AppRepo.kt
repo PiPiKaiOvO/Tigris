@@ -72,6 +72,14 @@ class AppRepo(private val ctx: Context) {
         (pm.getApplicationInfo(pkg, 0).flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
     } catch (e: PackageManager.NameNotFoundException) { false }
 
+    /** Apps the TV needs to work (settings, the TV player, inputs, launchers); never offered for deletion. */
+    fun isEssential(pkg: String): Boolean {
+        if (pkg == ctx.packageName || pkg in ESSENTIAL) return true
+        if (listOf(".settings", "tvinput", "launcher", "systemui", "inputmethod", ".ime").any { it in pkg.lowercase() }) return true
+        val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        return pm.queryIntentActivities(home, PackageManager.MATCH_DISABLED_COMPONENTS).any { it.activityInfo.packageName == pkg }
+    }
+
     fun launchIntent(app: AppEntry): Intent? {
         val i = if (app.leanback) pm.getLeanbackLaunchIntentForPackage(app.pkg) else null
         return (i ?: pm.getLaunchIntentForPackage(app.pkg) ?: Intent(Intent.ACTION_MAIN).setComponent(app.component))
@@ -149,6 +157,15 @@ class AppRepo(private val ctx: Context) {
             "com.oversea.aslauncher",
             "com.dangbei.TVHomeLauncher",
             "com.android.tv.settings.system.FallbackHome",
+        )
+        private val ESSENTIAL = setOf(
+            "com.sony.dtv.tvx",                // Sony's TV / HDMI player
+            "com.android.tv",                  // Live Channels
+            "com.google.android.tv",
+            "com.android.vending",
+            "com.google.android.gms",
+            "com.sony.dtv.systemupdate",
+            "com.sony.dtv.update",
         )
     }
 }

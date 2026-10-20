@@ -148,6 +148,32 @@ Work from adb. Before you write anything, note each value you read; restore the 
 
 Tell the user what now works and what still doesn't. Their adapted build stays on their TV. If they want to share it, offer to commit the change on their own fork and open a pull request to `lesnolie/Tigris` with their GitHub account, naming the TV model and Android version. Never push to the upstream repository directly.
 
+## 10. TVs whose system fights third-party launchers
+
+Many Chinese TV systems (Xiaomi PatchWall, TCL, Hisense VIDAA-on-Android, Skyworth and others) aren't stock Android TV. The Home key goes back to the vendor launcher no matter what the default is, and third-party apps get killed in standby. Tigris has only been verified on Sony, so treat this section as a playbook. Go through the levels in order and stop at the first one that works. Ask the user before each level, explain what it changes, and record how to undo it. None of these need root, and none uninstall or disable a system app.
+
+First, find out what actually happens: press Home with `adb shell input keyevent KEYCODE_HOME`, then check `adb shell dumpsys activity activities | grep -m1 ResumedActivity`. Put the TV in standby and wake it, then check whether `pidof com.leslie.tvhome` still finds the app.
+
+1. **Default home, the standard way.** Run `cmd package set-home-activity` (step 4). On Android 10+ also try `adb shell cmd role add-role-holder android.app.role.HOME com.leslie.tvhome`. Some vendors offer a launcher choice in their own settings (search the settings app for "桌面" / "launcher").
+2. **Let it stay alive.** Run these commands:
+   - `adb shell dumpsys deviceidle whitelist +com.leslie.tvhome`
+   - `adb shell cmd appops set com.leslie.tvhome RUN_ANY_IN_BACKGROUND allow`
+   - `adb shell cmd appops set com.leslie.tvhome RUN_IN_BACKGROUND allow`
+
+   Also look for the vendor's own "自启动 / 后台管理 / 加速白名单" settings or its cleaner app, and whitelist Tigris there. Test standby again.
+3. **Re-assert after wake-up.** If the default home is reset in standby, the app can set it back itself through local adb (step 6 authorization). Add a `SCREEN_ON` receiver in `KeeperService` that runs `cmd package set-home-activity com.leslie.tvhome/.HomeActivity` via `LocalAdb.shell`, and starts `HomeActivity` if the vendor launcher is in front. Build and verify per 9.3.
+4. **Strongest: follow the Home key with an accessibility service.** When the vendor launcher's window comes to the front (`TYPE_WINDOW_STATE_CHANGED` with its package), immediately start `HomeActivity`. The user sees at most a flash. This needs a new `AccessibilityService` in the app, enabled with `adb shell settings put secure enabled_accessibility_services com.leslie.tvhome/<service class>` and `settings put secure accessibility_enabled 1`. Make it an opt-in setting, off by default. Some vendors revoke accessibility services from apps they don't trust; re-check after a standby cycle.
+
+If nothing works, tell the user plainly: that TV's system doesn't allow a replacement launcher, and Tigris can still be opened as an app.
+
+## 11. Optional: remove preinstalled apps
+
+Only on request. Tigris's long-press menu can delete preinstalled apps that appear on the home screen (see README). For background-only ones (ad, push, tracking services with no icon), list them with `pm list packages -s`, identify each by its label and path, and propose a list to the user. Explain each entry and ask before removing anything.
+
+- Remove with `adb shell pm uninstall -k --user 0 <pkg>`. Restore with `adb shell cmd package install-existing <pkg>`. Give the user both commands.
+- Never remove settings, launchers, input-method, TV player/tuner/`tvinput`, system UI, update, Google Play services, or anything you can't identify. On Chinese TVs, also keep licensing services ("播控" such as `com.newtv.*`, CIBN, ktcp-related). Licensed video apps stop playing without them.
+- After removing, reboot only if the user agrees, then check that the TV still starts, HDMI inputs work and video apps play.
+
 ## Uninstall
 
 ```sh
