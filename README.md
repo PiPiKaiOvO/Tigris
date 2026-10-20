@@ -47,21 +47,23 @@ Agent 会按 [AGENTS.md](AGENTS.md) 一步步完成：连接电视、安装、�
 | 释放内存 | ✅ 只能清理缓存 | ✅ 彻底结束后台 App | |
 | 待机、关机、重启 | | ✅ | |
 | 把相框设为系统屏保、空闲时长 | | ✅ | |
-| 亮度、音量滑条 | | | ✅ |
-| HDMI 输入源切换 | | | ✅ |
+| 音量滑条 | ✅ Android 标准音量 | | ✅ 电视音量 |
+| HDMI 输入源切换 | ✅ 大多数电视 | | ✅ 还能显示当前输入源 |
+| 亮度（背光）滑条 | | | ✅ |
 
 - **本机调试授权**：App 会连接电视自己的 adb（`127.0.0.1:5555`，基于 [dadb](https://github.com/mobile-dev-inc/dadb)）来执行系统命令。前提是电视在开发者选项里打开了"网络调试 / ADB 调试"。首次使用时电视会弹出"允许调试吗？"，勾选"始终允许"即可。这个机制在各品牌电视上都通用。
-- **仅索尼**：亮度、音量和输入源使用索尼 BRAVIA 的 IP 控制接口（`http://127.0.0.1/sony/`）。在其他品牌的电视上，这几项会显示为灰色。
+- **索尼**：电视有 BRAVIA IP 控制接口（`http://127.0.0.1/sony/`）时，亮度、音量和输入源都走这个接口。
+- **其他品牌**：自动改用 Android 标准接口。音量用 `AudioManager`；输入源用 `TvInputManager` 列出 HDMI 口，再交给系统的电视播放器切换。Android 没有调背光的标准接口，所以亮度滑条会隐藏。用功放（ARC/eARC）时，标准音量调的可能是电视本身而不是功放。
 
 ### 想兼容其他品牌电视
 
-这三项都集中在 [`Bravia.kt`](app/src/main/java/com/leslie/tvhome/Bravia.kt) 里，可以按下面的思路替换：
+这三项都在 [`TvControls.kt`](app/src/main/java/com/leslie/tvhome/TvControls.kt) 里：先试索尼接口，不行再用 Android 标准接口。要支持某个品牌自己的接口（比如背光），在这里加一个分支就行。
 
-- **音量**：改用 Android 标准的 `AudioManager.setStreamVolume(STREAM_MUSIC, …)`，所有电视都能用。不过电视用 ARC/eARC 接功放时，调的可能不是功放的音量。
-- **输入源**：改用 `TvInputManager.getTvInputList()` 列出 HDMI 输入，切换时用 `TvContract.buildChannelUriForPassthroughInput(inputId)` 打开系统的直播电视 App。大多数带 HDMI 的 Android TV 都支持这种方式。
-- **亮度（背光）**：Android 没有标准接口，各品牌（TCL、海信、小米等）都是私有的。可以对接厂商接口，或者在非索尼电视上隐藏这一项。
+不会写代码也没关系。把下面这句话发给 Agent，它会按 [AGENTS.md 的"适配"一节](AGENTS.md#9-adapting-tigris-to-a-tv-that-isnt-fully-supported)，在你的电视上查找可用的接口、改代码、编译、安装并验证：
 
-欢迎提交其他品牌的适配 PR。
+> 按 https://github.com/lesnolie/Tigris 的 AGENTS.md 安装 Tigris，如果亮度/音量/输入源在我的电视上不能用，帮我适配。电视 IP 是 192.168.x.x
+
+适配成功后，欢迎提交 PR，让同品牌的人都能用上。
 
 ## 手动构建和安装
 

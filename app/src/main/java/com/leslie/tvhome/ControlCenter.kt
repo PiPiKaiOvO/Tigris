@@ -66,6 +66,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
     private val status = ctx.text(12f, Color.argb(120, 255, 255, 255))
     private val focusables = ArrayList<View>()
     private val io = Executors.newSingleThreadExecutor()
+    private val tv = TvControls(ctx)
     private val ticker = object : Runnable {
         override fun run() { updateClock(); host.postDelayed(this, 15_000) }
     }
@@ -102,9 +103,9 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
             leftMargin = -ctx.dp(6); rightMargin = -ctx.dp(6)
         })
 
-        brightness = Slider(R.drawable.ic_sun, "亮度") { v -> Bravia.setBrightness(v) }.also { focusables += it }
+        brightness = Slider(R.drawable.ic_sun, "亮度") { v -> tv.setBrightness(v) }.also { focusables += it }
         panel.addView(brightness, LinearLayout.LayoutParams(-1, ctx.dp(54)).apply { topMargin = ctx.dp(6) })
-        volume = Slider(R.drawable.ic_volume, "音量") { v -> Bravia.setVolume(volumeTarget, v) }.also { focusables += it }
+        volume = Slider(R.drawable.ic_volume, "音量") { v -> tv.setVolume(volumeTarget, v) }.also { focusables += it }
         panel.addView(volume, LinearLayout.LayoutParams(-1, ctx.dp(54)).apply { topMargin = ctx.dp(12) })
 
         inputModule = Module(R.drawable.ic_input, Color.rgb(10, 132, 255), "输入源") { pickInput() }.also { focusables += it }
@@ -436,17 +437,22 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         status.visibility = if (status.text.isEmpty()) View.GONE else View.VISIBLE
         if (!isOpen) return
         io.execute {
-            val b = Bravia.brightness()
-            val v = Bravia.volume()
-            val list = Bravia.inputs()
-            val cur = Bravia.currentInput()
+            val b = tv.brightness()
+            val v = tv.volume()
+            val list = tv.inputs()
+            val cur = tv.currentInput()
             host.post {
                 brightness.set(b)
+                brightness.visibility = if (b == null) View.GONE else View.VISIBLE
                 v?.target?.takeIf { it.isNotEmpty() }?.let { volumeTarget = it }
                 volume.set(v)
                 inputs = list
                 inputModule.sub.text = list.firstOrNull { it.uri == cur }?.name
-                    ?: if (list.isEmpty()) "无法读取电视的输入源" else "当前：主屏幕"
+                    ?: when {
+                        list.isEmpty() -> "无法读取电视的输入源"
+                        list.first().uri.startsWith("extInput:") -> "当前：主屏幕"
+                        else -> "${list.size} 个 HDMI 输入"  // Android can't tell which one is showing
+                    }
             }
         }
     }
@@ -463,7 +469,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         close()
         val sheet = Sheet(host).title("输入源").message(null)
         for (i in inputs) sheet.button(i.name, R.drawable.ic_input) {
-            io.execute { Bravia.setInput(i.uri) }
+            io.execute { tv.setInput(i) }
         }
         sheet.button("取消") {}
         home.showSheet(sheet)

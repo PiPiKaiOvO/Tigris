@@ -30,13 +30,13 @@ If it prints `unauthorized`, the TV is showing "Allow USB debugging?". Ask the u
 
 ```sh
 adb -s <TV_IP>:5555 shell getprop ro.build.version.sdk          # must be >= 28 (Android 9)
-adb -s <TV_IP>:5555 shell getprop ro.product.manufacturer       # "Sony" enables brightness/volume/HDMI
+adb -s <TV_IP>:5555 shell getprop ro.product.manufacturer       # "Sony" adds the brightness slider (step 7)
 adb -s <TV_IP>:5555 shell getprop ro.product.model
 adb -s <TV_IP>:5555 shell cmd package resolve-activity -a android.intent.action.MAIN -c android.intent.category.HOME
 adb -s <TV_IP>:5555 shell settings get secure screensaver_components
 ```
 
-Note the current home activity (the stock launcher) and the current screensaver; you need them to undo the install. Tell the user which features they will get (see the compatibility table in README.md): non-Sony TVs get everything except the brightness, volume and HDMI controls.
+Note the current home activity (the stock launcher) and the current screensaver; you need them to undo the install. Tell the user which features they will get (see the compatibility table in README.md). On TVs other than Sony, volume and HDMI switching use standard Android APIs, and the brightness slider is hidden. Section 9 covers adapting the app when something doesn't work.
 
 ## 3. Install
 
@@ -85,7 +85,7 @@ adb -s <TV_IP>:5555 shell uiautomator dump /sdcard/u.xml && adb -s <TV_IP>:5555 
 
 Look for `focused="true"` and its `text` / `bounds` before sending `KEYCODE_DPAD_CENTER`.
 
-## 7. Sony BRAVIA only: brightness, volume and HDMI
+## 7. Sony BRAVIA only: brightness, plus TV-side volume and HDMI
 
 Skip this step if the manufacturer is not Sony. The TV's IP control API must accept a registration for client `tvhome:1`:
 
@@ -100,7 +100,7 @@ The TV now shows a 4-digit PIN for about a minute. Ask the user to read it out, 
 curl -s -u ":<PIN>" http://<TV_IP>/sony/accessControl -d "$BODY"   # {"result":[]} means success
 ```
 
-If the first call returns an error or nothing, ask the user to enable Settings → Network & Internet → Remote device settings → "Control remotely" (the menu name varies by model), then retry. To check: open the Control Center. The brightness and volume sliders show numbers instead of "—".
+If the first call returns an error or nothing, ask the user to enable Settings → Network & Internet → Remote device settings → "Control remotely" (the menu name varies by model), then retry. To check: open the Control Center. The brightness slider is shown and the input row says "当前：…".
 
 ## 8. Optional settings
 
@@ -109,6 +109,44 @@ Tell the user these exist; change them only if asked. All of them are in the Con
 - Photo frame as the system screensaver (电视空闲时显示相框) and the idle time.
 - Background photo change interval, or switch to a gradient theme.
 - Apps kept alive by memory cleanup.
+
+## 9. Adapting Tigris to a TV that isn't fully supported
+
+Do this only when the user asks for it, or agrees after you report what doesn't work. Typical gaps on TVs that aren't Sony:
+
+- The brightness slider is missing. Android has no standard backlight API.
+- The volume slider moves but the sound doesn't change, for example when audio goes to an amplifier over ARC.
+- The input row says "无法读取电视的输入源", or picking an HDMI input does nothing.
+
+All three live in [`TvControls.kt`](app/src/main/java/com/leslie/tvhome/TvControls.kt). It tries Sony's API first, then standard Android. A new brand is one more branch there, usually gated on `Build.MANUFACTURER`. Don't change the Sony or standard paths.
+
+### 9.1 Set up a build
+
+- Clone https://github.com/lesnolie/Tigris. You need JDK 17+ (`java -version`) and an Android SDK with `platforms;android-36` and `build-tools` (install them with `sdkmanager`). Put `sdk.dir=<path>` in `local.properties`. Build with `./gradlew assembleRelease`.
+- Your build is signed with this computer's debug key, which differs from the Release APK. `adb install -r` will fail with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. Ask the user before you `adb uninstall com.leslie.tvhome` first: it resets the app's settings, and afterwards you must redo step 4 and the user must allow local debugging again (step 6).
+
+### 9.2 Find what the TV offers
+
+Work from adb. Before you write anything, note each value you read; restore the original values when you are done.
+
+- **Volume**: `adb shell cmd media_session volume --stream 3 --get` shows what the app's slider controls. Change it with `--set <n>` and ask the user whether the sound changed. If it didn't, look in `dumpsys audio` for the active output device and whether HDMI-CEC volume control is in use (`dumpsys hdmi_control`).
+- **HDMI inputs**: `adb shell dumpsys tv_input` lists the inputs with their ids and states; the HDMI ones usually have `HDMI` or `HW` in the id. Test a switch the way the app does it:
+  `adb shell am start -a android.intent.action.VIEW -d "content://android.media.tv/passthrough/<url-encoded input id>"`
+  If nothing happens, run `adb logcat -c`, ask the user to switch input with the remote, then read `adb logcat -d | grep -iE "START u0|tune|input"` to find the vendor's player activity and the intent it uses.
+- **Brightness / backlight**: take a snapshot with `adb shell settings list system; settings list global; settings list secure`. Ask the user to change the backlight in the TV's picture settings, then take the snapshot again and diff the two. A key that changed (names like `backlight`, `picture_backlight`) is a candidate. Test it with `settings put`, ask the user whether the screen changed, then put the original value back. Also check logcat during the change, and `adb shell ss -ltn` for vendor control services on localhost, like Sony's port 80.
+
+### 9.3 Implement and verify
+
+- Add the branch to `TvControls.kt`. `brightness()` returning a non-null `Bravia.Level(value, min, max)` makes the slider appear; `setBrightness` is then called with values in that range. All of these run on a background thread, so blocking I/O is fine.
+- The app has no permission to write settings. Pick one of these:
+  - Grant `WRITE_SECURE_SETTINGS` with `adb shell pm grant com.leslie.tvhome android.permission.WRITE_SECURE_SETTINGS`, after adding it to the manifest. Note that the grant is lost on uninstall.
+  - Grant `WRITE_SETTINGS` (system table) with `adb shell appops set com.leslie.tvhome WRITE_SETTINGS allow`.
+  - Run the command through the app's own local adb, `LocalAdb.shell(ctx, "settings put …")` in `Cleaner.kt`. This works once the user has allowed local debugging.
+- Build, install, open the Control Center (Back on the home screen), and `screencap`. Move to the slider with D-pad keys, checking the focused element first (step 6). Then read the value back the same way as in 9.2 to confirm the change.
+
+### 9.4 Finish
+
+Tell the user what now works and what still doesn't. Their adapted build stays on their TV. If they want to share it, offer to commit the change on their own fork and open a pull request to `lesnolie/Tigris` with their GitHub account, naming the TV model and Android version. Never push to the upstream repository directly.
 
 ## Uninstall
 
