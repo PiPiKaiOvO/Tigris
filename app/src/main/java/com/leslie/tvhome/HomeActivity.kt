@@ -281,7 +281,9 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         })
         grid.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) {
-                scrollY += dy
+                // Measured from the rows themselves: layouts and jumps (reloads, scrollToPosition)
+                // move the grid with dy = 0, so a running sum of dy drifts away from the truth.
+                scrollY = gridOffset() ?: (scrollY + dy)
                 val off = scrollY.toFloat()
                 header.translationY = -off
                 header.alpha = (1f - off / (rowPitch * 1.6f)).coerceIn(0f, 1f)
@@ -488,9 +490,19 @@ class HomeActivity : Activity(), TileAdapter.Listener {
                     val headerOk = header.hasFocus() && !firstFocus
                     if (!grid.hasFocus() && !headerOk && sheets.isEmpty() && !control.isOpen) focusAt(idx)
                     firstFocus = false
+                    // A new list can leave the grid between rows; put the focused row back where it belongs.
+                    grid.post { grid.focusedChild?.let { grid.layoutManager?.requestChildRectangleOnScreen(grid, it, Rect(), false, true) } }
                 }
             }
         }
+    }
+
+    /** How far the grid is scrolled from its resting place, worked out from the first laid-out tile. */
+    private fun gridOffset(): Int? {
+        val lm = grid.layoutManager ?: return null
+        val child = grid.getChildAt(0) ?: return null
+        val p = grid.getChildAdapterPosition(child).takeIf { it >= 0 } ?: return null
+        return firstRowY + (p / cols) * rowPitch - lm.getDecoratedTop(child)
     }
 
     private fun focusAt(pos: Int) {
