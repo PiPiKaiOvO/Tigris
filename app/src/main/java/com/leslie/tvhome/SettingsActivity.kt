@@ -160,7 +160,7 @@ class SettingsActivity : Activity() {
                 runOnUiThread { v.text = if (ok) "已授权" else "未授权，按确认键重试" }
             }.start()
         }
-        row("系统设置", { "" }) { startActivity(Intent(Settings.ACTION_SETTINGS)) }
+        row("系统设置", { "" }) { startActivity(TvControls(this).settingsIntent()) }
         row("关于", { "主屏幕 " + packageManager.getPackageInfo(packageName, 0).versionName }) {}
     }
 
