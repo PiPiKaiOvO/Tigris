@@ -63,7 +63,6 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     private lateinit var adapter: TileAdapter
     private lateinit var repo: AppRepo
     private lateinit var prefs: Prefs
-    private lateinit var walls: Wallpapers
     private lateinit var control: ControlCenter
 
     private val main = Handler(Looper.getMainLooper())
@@ -155,7 +154,6 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
         repo = AppRepo(this)
-        walls = Wallpapers(this)
         buildViews()
         control = ControlCenter(this, root)
         reload()
@@ -301,19 +299,20 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     /** Shows the gradient theme, or the photo for the current rotation slot (cross-fading when it changes). */
     private fun applyBackground() {
         val theme = prefs.background
-        val photo = if (theme == "daily") walls.current(prefs.wallMinutes) else null
-        val key = if (theme == "daily") "daily:${photo?.name}" else theme
+        val walls = Wallpapers(this, Wallpapers.sourceFor(theme))
+        val photo = if (Wallpapers.isPhoto(theme)) walls.current(prefs.wallMinutes) else null
+        val key = if (Wallpapers.isPhoto(theme)) "$theme:${photo?.name}" else theme
         if (key == shownBackground) return
         shownBackground = key
         io.execute {
-            if (theme == "daily" && !refreshing) {
+            if (Wallpapers.isPhoto(theme) && !refreshing) {
                 refreshing = true
                 walls.refresh()
                 refreshing = false
                 // First run: nothing was cached yet, so try again now that photos exist.
                 if (photo == null && walls.files().isNotEmpty()) main.post { shownBackground = null; applyBackground() }
             }
-            val bmp = photo?.let { walls.forHome(it) } ?: Backgrounds.render(if (theme == "daily") "green" else theme)
+            val bmp = photo?.let { walls.forHome(it) } ?: Backgrounds.render(if (Wallpapers.isPhoto(theme)) "green" else theme)
             val glass = LiquidGlass.bake(bmp, sw, sh, dockRect, dockRadius).also { it.prepareToDraw() }
             homeDock = glass
             main.post {

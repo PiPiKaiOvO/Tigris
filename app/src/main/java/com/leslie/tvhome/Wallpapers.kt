@@ -15,17 +15,23 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * Bing's daily photos (cn.bing.com works without a VPN), cached on disk.
- * The last ~15 days are fetched once a day and older ones are kept up to
- * [MAX_FILES], so the home background and the photo frame can rotate through them.
+ * Background pictures, cached on disk so the home background and the photo
+ * frame can rotate through them. Two sources, each in its own folder:
+ * - [BING]: Bing's daily photos (cn.bing.com works without a VPN); the last
+ *   ~15 days are fetched once a day.
+ * - [ANIME]: the month's most popular anime wallpapers on Wallhaven, SFW
+ *   only, a dozen new ones a day.
+ * Older pictures are kept up to [MAX_FILES].
  */
-class Wallpapers(private val ctx: Context) {
-    private val dir = File(ctx.filesDir, "wall").apply { mkdirs() }
+class Wallpapers(private val ctx: Context, private val source: String = BING) {
+    private val dir = File(ctx.filesDir, if (source == ANIME) "wall-anime" else "wall").apply { mkdirs() }
     private val metaFile = File(dir, "meta.json")
 
-    /** Cached files, newest first. */
-    fun files(): List<File> =
-        dir.listFiles { f -> f.name.endsWith(".jpg") }?.sortedByDescending { it.name } ?: emptyList()
+    /** Cached files, newest first (Bing files are named by date; others by download time). */
+    fun files(): List<File> {
+        val all = dir.listFiles { f -> f.name.endsWith(".jpg") } ?: return emptyList()
+        return if (source == ANIME) all.sortedByDescending { it.lastModified() } else all.sortedByDescending { it.name }
+    }
 
     /** The photo for the current time slot when rotating every [minutes]. */
     fun current(minutes: Int): File? {
@@ -46,6 +52,17 @@ class Wallpapers(private val ctx: Context) {
         if (!force && stamp.exists() && metaFile.exists() && System.currentTimeMillis() - stamp.lastModified() < 20 * 3_600_000L && files().size >= 4) return
         val meta = try { JSONObject(metaFile.readText()) } catch (e: Exception) { JSONObject() }
         try {
+            if (source == ANIME) fetchAnime(meta) else fetchBing(meta)
+            files().drop(MAX_FILES).forEach { meta.remove(it.name); it.delete() }
+            metaFile.writeText(meta.toString())
+            stamp.writeText(System.currentTimeMillis().toString())
+        } catch (e: Exception) {
+            Log.w("Wallpapers", "refresh failed", e)
+            if (meta.length() > 0) metaFile.writeText(meta.toString())
+        }
+    }
+
+    private fun fetchBing(meta: JSONObject) {
             for (idx in listOf(0, 7)) {
                 val json = get("https://cn.bing.com/HPImageArchive.aspx?format=js&idx=$idx&n=8&mkt=zh-CN").decodeToString()
                 val imgs = JSONObject(json).getJSONArray("images")
@@ -62,19 +79,49 @@ class Wallpapers(private val ctx: Context) {
                     tmp.renameTo(f)
                 }
             }
-            files().drop(MAX_FILES).forEach { meta.remove(it.name); it.delete() }
-            metaFile.writeText(meta.toString())
-            stamp.writeText(System.currentTimeMillis().toString())
-        } catch (e: Exception) {
-            Log.w("Wallpapers", "refresh failed", e)
-            if (meta.length() > 0) metaFile.writeText(meta.toString())
+    }
+
+    private fun fetchAnime(meta: JSONObject) {
+        // A different page of the month's ranking each day keeps the set changing.
+        val page = 1 + (System.currentTimeMillis() / 86_400_000L % 5).toInt()
+        val list = JSONObject(get("https://wallhaven.cc/api/v1/search?categories=010&purity=100&sorting=toplist" +
+            "&topRange=1M&atleast=1920x1080&ratios=16x9&page=$page").decodeToString()).getJSONArray("data")
+        var added = 0
+        for (i in 0 until list.length()) {
+            if (added >= 12) break
+            val o = list.getJSONObject(i)
+            // Some originals are 10000 px wide; not worth the download or the memory.
+            if (o.optLong("file_size") > 8_000_000) continue
+            val name = "wh-" + o.getString("id") + ".jpg"
+            val f = File(dir, name)
+            if (f.exists() && f.length() > 0) continue
+            val bmp = fitScreen(get(o.getString("path"))) ?: continue
+            val tmp = File(dir, "$name.part")
+            tmp.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+            bmp.recycle()
+            tmp.renameTo(f)
+            meta.put(name, "Wallhaven · wallhaven.cc/w/" + o.getString("id"))
+            added++
         }
+    }
+
+    /** Decodes a large picture straight down to 1920x1080. */
+    private fun fitScreen(bytes: ByteArray): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= 1920 && bounds.outHeight / (sample * 2) >= 1080) sample *= 2
+        val b = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
+            ?: return null
+        if (b.width == 1920 && b.height == 1080) return b
+        return Bitmap.createScaledBitmap(b, 1920, 1080, true).also { if (it !== b) b.recycle() }
     }
 
     private fun get(url: String): ByteArray {
         val c = URL(url).openConnection() as HttpURLConnection
         c.connectTimeout = 8000
         c.readTimeout = 15000
+        c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 12) Tigris")
         return c.inputStream.use { it.readBytes() }
     }
 
@@ -100,6 +147,12 @@ class Wallpapers(private val ctx: Context) {
 
     companion object {
         const val MAX_FILES = 40
+        const val BING = "daily"
+        const val ANIME = "anime"
+
+        /** The picture source behind a [Prefs.background] value; gradient themes fall back to Bing. */
+        fun sourceFor(background: String) = if (background == ANIME) ANIME else BING
+        fun isPhoto(background: String) = background == BING || background == ANIME
 
         /** Cheap, smooth blur: shrink, box-blur three times, let the view scale it back up. */
         fun blurred(src: Bitmap, darken: Float = 0.45f): Bitmap {

@@ -108,18 +108,23 @@ class SettingsActivity : Activity() {
         }
         row("隐藏的 App", { "${prefs.hidden.size} 个" }) { show(Page.HIDDEN) }
         row("已删除的预装 App", { "${prefs.removed.size} 个" }) { show(Page.REMOVED) }
-        row("背景", { Backgrounds.THEMES[prefs.background]?.first ?: "风景照片（自动更换）" }) {
-            val keys = listOf("daily") + Backgrounds.THEMES.keys.toList()
+        row("背景", {
+            when (prefs.background) {
+                Wallpapers.ANIME -> "二次元壁纸（自动更换）"
+                else -> Backgrounds.THEMES[prefs.background]?.first ?: "风景照片（自动更换）"
+            }
+        }) {
+            val keys = listOf(Wallpapers.BING, Wallpapers.ANIME) + Backgrounds.THEMES.keys.toList()
             prefs.background = keys[(keys.indexOf(prefs.background) + 1) % keys.size]
         }
         row("照片更换频率", { minutesLabel(prefs.wallMinutes) }) {
             val opts = listOf(15, 30, 60, 180, 1440)
             prefs.wallMinutes = opts[(opts.indexOf(prefs.wallMinutes) + 1) % opts.size]
         }
-        row("立即更新照片", { "已有 ${Wallpapers(this).files().size} 张" }) { v ->
+        row("立即更新照片", { "已有 ${Wallpapers(this, Wallpapers.sourceFor(prefs.background)).files().size} 张" }) { v ->
             v.text = "正在下载…"
             Thread {
-                val w = Wallpapers(applicationContext)
+                val w = Wallpapers(applicationContext, Wallpapers.sourceFor(prefs.background))
                 w.refresh(force = true)
                 runOnUiThread { v.text = "已有 ${w.files().size} 张" }
             }.start()

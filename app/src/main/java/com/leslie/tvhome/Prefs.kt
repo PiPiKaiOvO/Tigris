@@ -33,7 +33,7 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("shutdown_on_power", false)
         set(v) = sp.edit().putBoolean("shutdown_on_power", v).apply()
 
-    /** One of [Backgrounds.THEMES] keys, or "daily" for rotating Bing photos. */
+    /** One of [Backgrounds.THEMES] keys, or a rotating photo source: "daily" (Bing) or "anime" (Wallhaven). */
     var background: String
         get() = sp.getString("background", "daily")!!
         set(v) = sp.edit().putString("background", v).apply()

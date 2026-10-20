@@ -28,8 +28,8 @@ import java.util.concurrent.Executors
  * in a corner that drifts a little every minute.
  */
 class PhotoFrameView(ctx: Context) : FrameLayout(ctx) {
-    private val walls = Wallpapers(ctx)
     private val prefs = Prefs(ctx)
+    private val walls = Wallpapers(ctx, Wallpapers.sourceFor(prefs.background))
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
     private val layers = arrayOf(image(), image())
