@@ -112,7 +112,7 @@ adb -s <TV_IP>:5555 shell am broadcast -a com.leslie.tvhome.CONFIG -n com.leslie
 # prints data="guard=true keep_adb=true secure_settings=true"
 ```
 
-The user can change both later in 设置 → 桌面守护 / 保持 ADB 调试开启.
+The user can change both later in 设置 → 桌面守护 / 保持 ADB 调试开启. These rows only appear where they matter: 桌面守护 on Xiaomi, TCL, or wherever Tigris is not the default home; 保持 ADB 调试开启 on Xiaomi only.
 
 ## 5. Verify
 
@@ -169,8 +169,7 @@ If the first call returns an error or nothing, ask the user to enable Settings �
 
 Tell the user these exist; change them only if asked. All of them are in the Control Center → 设置 (gear), or on the "主屏幕设置" page:
 
-- **用手机设置壁纸**: shows a QR code. A phone on the same Wi-Fi opens a page to upload its own photos, paste picture links (an image, a random-image API, or a page / JSON listing images; fetched daily), and pick the background and screensaver.
-- Background: Bing photos, anime wallpapers, 我的照片 (uploaded), 自定义链接, or a gradient theme; and the change interval.
+- Background (背景, also the **壁纸** tile on the home screen): every choice shown as a picture, picked with one press — Bing photos, anime wallpapers, 我的照片 (uploaded), 自定义链接, or a gradient theme; plus the change interval. The same page shows a QR code: a phone on the same Wi-Fi opens a page to upload its own photos, paste picture links (an image, a random-image API, or a page / JSON listing images; fetched daily), and pick the background and screensaver.
 - Photo frame as the system screensaver (电视空闲时显示相框), the idle time, and its content (屏保内容): photos or Apple TV aerial films (streamed from Apple, about 15–20 Mbps; falls back to photos offline). On Xiaomi, which shows its own screensaver instead of Android's, the home screen starts the frame 15 s before Xiaomi's would.
 - HDMI inputs on the home screen: Control Center → 输入源 → 在主屏幕上显示….
 - Apps kept alive by memory cleanup.

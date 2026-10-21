@@ -112,11 +112,7 @@ class SettingsActivity : Activity() {
             Backgrounds.THEMES[prefs.background]?.first ?: Wallpapers.label(Wallpapers.sourceFor(prefs.background)).let {
                 if (prefs.background == Wallpapers.MINE) it else "$it（自动更换）"
             }
-        }) {
-            val keys = Wallpapers.SOURCES + Backgrounds.THEMES.keys.toList()
-            prefs.background = keys[(keys.indexOf(prefs.background) + 1) % keys.size]
-        }
-        row("用手机设置壁纸", { "上传照片、填图片链接" }) { startActivity(Intent(this, PhoneActivity::class.java)) }
+        }) { startActivity(Intent(this, WallpaperActivity::class.java)) }
         row("照片更换频率", { minutesLabel(prefs.wallMinutes) }) {
             val opts = listOf(15, 30, 60, 180, 1440)
             prefs.wallMinutes = opts[(opts.indexOf(prefs.wallMinutes) + 1) % opts.size]
@@ -166,7 +162,8 @@ class SettingsActivity : Activity() {
                 runOnUiThread { v.text = if (ok) "已授权" else "未授权，按确认键重试" }
             }.start()
         }
-        row("桌面守护（小米、TCL 等）", { if (!prefs.guard) "关" else if (HomeGuardService.isRunning) "开" else "开（未运行）" }) { v ->
+        // Only where the TV keeps Home for its own launcher; on Sony or stock Android TV Tigris is the real home.
+        if (Guard.needed(this)) row("桌面守护", { if (!prefs.guard) "关" else if (HomeGuardService.isRunning) "开" else "开（未运行）" }) { v ->
             val on = !prefs.guard
             v.text = "正在设置…"
             Thread {
@@ -177,7 +174,7 @@ class SettingsActivity : Activity() {
                 }
             }.start()
         }
-        row("保持 ADB 调试开启", { onOff(prefs.keepAdb) }) { v ->
+        if (Guard.isXiaomi() || prefs.keepAdb) row("保持 ADB 调试开启", { onOff(prefs.keepAdb) }) { v ->
             val on = !prefs.keepAdb
             v.text = "正在设置…"
             Thread {

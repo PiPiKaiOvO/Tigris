@@ -59,6 +59,18 @@ object Guard {
 
     private fun service(ctx: Context) = ComponentName(ctx, HomeGuardService::class.java).flattenToString()
 
+    /** Xiaomi switches ADB off on every wake, so "keep ADB on" is offered there only. */
+    fun isXiaomi() = Build.MANUFACTURER.equals("Xiaomi", true) || Build.BRAND.equals("Xiaomi", true) || Build.BRAND.equals("Redmi", true)
+
+    private fun isTcl() = Build.MANUFACTURER.equals("TCL", true) || Build.BRAND.equals("FFALCON", true)
+
+    /**
+     * Whether this TV needs the guard: Xiaomi and TCL (Xiaomi reports Tigris as the default home
+     * while still opening PatchWall), any TV where Tigris is not the default home (including the
+     * guard build, which has no HOME filter), or the guard is already on.
+     */
+    fun needed(ctx: Context) = Prefs(ctx).guard || isXiaomi() || isTcl() || !isDefaultHome(ctx)
+
     fun isDefaultHome(ctx: Context): Boolean =
         ctx.packageManager.resolveActivity(
             Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), PackageManager.MATCH_DEFAULT_ONLY,

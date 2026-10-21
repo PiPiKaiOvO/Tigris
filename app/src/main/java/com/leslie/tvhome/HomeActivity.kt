@@ -611,7 +611,11 @@ class HomeActivity : Activity(), TileAdapter.Listener {
                 prefs.hidden = prefs.hidden + app.pkg
                 reload()
             }
-            .button("应用信息") {
+        if (repo.isOwn(app.pkg)) {
+            showSheet(s.button("取消") {}, restoreFocusTo = pos)
+            return
+        }
+        s.button("应用信息") {
                 startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${app.pkg}"))
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }
