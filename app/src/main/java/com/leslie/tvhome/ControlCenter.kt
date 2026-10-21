@@ -25,6 +25,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 /**
  * The tvOS Control Center: a frosted-glass panel in the top-right corner with
@@ -349,6 +350,9 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         private var min = 0
         private var max = 100
         private var ready = false
+        // Logical target drives hardware writes; displayedValue is visual-only and animates between targets.
+        private var displayedValue = 0f
+        private var valueAnimator: android.animation.ValueAnimator? = null
         private val push = Runnable { val v = value; io.execute { send(v) } }
 
         init {
@@ -376,7 +380,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
                         if (e.repeatCount == 0) Motion.bump(this, dir, 0)
                     } else {
                         value = nv
-                        draw()
+                        animateValueTo(value)
                         removeCallbacks(push)
                         postDelayed(push, 150)
                     }
@@ -387,25 +391,68 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         }
 
         fun set(level: Bravia.Level?) {
+            val wasReady = ready
+            val oldTarget = value
             ready = level != null
-            if (level != null) { value = level.value; min = level.min; max = level.max }
+            if (level != null) {
+                min = level.min
+                max = level.max
+                value = level.value.coerceIn(min, max)
+                // The first asynchronous read fills in smoothly from the minimum.
+                if (!wasReady) displayedValue = min.toFloat()
+                if (!wasReady || value != oldTarget) animateValueTo(value) else draw()
+            } else {
+                valueAnimator?.cancel()
+                valueAnimator = null
+                displayedValue = min.toFloat()
+                draw()
+            }
             alpha = if (ready) 1f else 0.45f
+        }
+
+        private fun animateValueTo(target: Int) {
+            valueAnimator?.cancel()
+            val end = target.toFloat()
+            if (displayedValue == end) {
+                draw()
+                return
+            }
+            valueAnimator = android.animation.ValueAnimator.ofFloat(displayedValue, end).apply {
+                duration = 240L
+                interpolator = Motion.ease
+                addUpdateListener {
+                    displayedValue = it.animatedValue as Float
+                    draw()
+                }
+                start()
+            }
+        }
+
+        fun finishAnimation() {
+            valueAnimator?.cancel()
+            valueAnimator = null
+            displayedValue = value.toFloat()
+            draw()
+        }
+
+        override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+            super.onSizeChanged(w, h, oldw, oldh)
             draw()
         }
 
         private fun draw() {
-            valueText.text = if (ready) value.toString() else "—"
-            val frac = if (ready && max > min) (value - min).toFloat() / (max - min) else 0f
-            post {
-                val w = (width * frac).toInt()
-                fill.layoutParams = fill.layoutParams.apply { width = w }
-                fill.setBackgroundColor(if (isFocused) Color.WHITE else Color.argb(215, 255, 255, 255))
-                // Glyphs the fill has reached turn dark, as on iOS.
-                val dark = Color.argb(220, 0, 0, 0)
-                img.setColorFilter(if (w > ctx.dp(42)) dark else Color.WHITE)
-                nameText.setTextColor(if (w > ctx.dp(54) + nameText.width) dark else Color.WHITE)
-                valueText.setTextColor(if (w > width - ctx.dp(20)) dark else Color.WHITE)
-            }
+            valueText.text = if (ready) displayedValue.roundToInt().toString() else "—"
+            if (width <= 0) return
+            val frac = if (ready && max > min)
+                ((displayedValue - min) / (max - min)).coerceIn(0f, 1f) else 0f
+            val w = (width * frac).toInt()
+            if (fill.layoutParams.width != w) fill.layoutParams = fill.layoutParams.apply { width = w }
+            fill.setBackgroundColor(if (isFocused) Color.WHITE else Color.argb(215, 255, 255, 255))
+            // Glyphs the fill has reached turn dark, as on iOS.
+            val dark = Color.argb(220, 0, 0, 0)
+            img.setColorFilter(if (w > ctx.dp(42)) dark else Color.WHITE)
+            nameText.setTextColor(if (w > ctx.dp(54) + nameText.width) dark else Color.WHITE)
+            valueText.setTextColor(if (w > width - ctx.dp(20)) dark else Color.WHITE)
         }
     }
 
@@ -438,6 +485,8 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         if (!isOpen) return
         isOpen = false
         host.removeCallbacks(ticker)
+        brightness.finishAnimation()
+        volume.finishAnimation()
         scrim.animate().alpha(0f).setDuration(180).start()
         panel.animate().alpha(0f).translationX(ctx.dp(60).toFloat()).scaleX(0.96f).scaleY(0.96f).setDuration(200)
             .setUpdateListener { panel.invalidate() }
@@ -478,6 +527,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
                 inputModule.sub.text = list.firstOrNull { it.uri == cur }?.name
                     ?: when {
                         list.isEmpty() -> "无法读取电视的输入源"
+                        list.first().uri.startsWith("tcl-input://") -> "TCL 信号源选择器"
                         list.first().uri.startsWith("extInput:") -> "当前：主屏幕"
                         else -> "${list.size} 个 HDMI 输入"  // Android can't tell which one is showing
                     }
