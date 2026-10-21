@@ -122,7 +122,7 @@ Take a screenshot and look at it:
 adb -s <TV_IP>:5555 exec-out screencap -p > tv.png
 ```
 
-You should see a large clock top-left, a row of app tiles on a glass panel near the bottom, and two round icons top-right. Press Home (`input keyevent KEYCODE_HOME`) and check again.
+You should see a compact clock, two round controls and an optional profile portrait top-right, and a row of app tiles on a glass dock near the bottom. Back opens separate floating glass controls with no enclosing panel. Press Home (`input keyevent KEYCODE_HOME`) and check again.
 
 If the stock launcher appears instead:
 

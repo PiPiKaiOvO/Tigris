@@ -6,7 +6,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.animation.ValueAnimator
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -19,7 +18,6 @@ import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.TransitionDrawable
 import android.graphics.Rect
-import android.graphics.Typeface
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
@@ -44,8 +42,7 @@ import java.util.Locale
 import java.util.concurrent.Executors
 
 /**
- * tvOS 26 style home: soft colour gradient, date and a large thin clock
- * top-left, Wi-Fi and Control Center buttons top-right, then the app grid.
+ * tvOS style home: a low glass dock and a compact status row in the top-right.
  */
 class HomeActivity : Activity(), TileAdapter.Listener {
     companion object {
@@ -64,10 +61,13 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     }
 
     private lateinit var root: FrameLayout
+    private lateinit var scene: FrameLayout
+    private lateinit var backdrop: FrameLayout
+    private var glassScene: LiveGlass? = null
     private lateinit var bg: ImageView
     private lateinit var header: FrameLayout
-    private lateinit var dateText: TextView
     private lateinit var clockText: TextView
+    private lateinit var avatar: IconButton
     private lateinit var netButton: IconButton
     private lateinit var ccButton: IconButton
     private lateinit var grid: RecyclerView
@@ -122,8 +122,6 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     private var shelfItems: List<Shelf.Item> = emptyList()
     private var shelfIndex = 0
     private var shelfShown = false
-    private var shelfFade: ValueAnimator? = null
-    private var shelfFrac = 0f
     private val shelfShow = Runnable { pendingShelf?.let { showShelf(it) } }
     private val shelfAdvance = object : Runnable {
         override fun run() {
@@ -134,7 +132,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
             net.execute {
                 val b = Shelf.image(this@HomeActivity, item.image)
                 main.post {
-                    if (shelfPkg == pkg && shelfShown) {
+                    if (shelfPkg == pkg && shelfShown && !control.isOpen) {
                         if (b != null) showShelfItem(next, b)
                         main.postDelayed(this, SHELF_SECONDS * 1000L)
                     }
@@ -205,6 +203,9 @@ class HomeActivity : Activity(), TileAdapter.Listener {
 
     override fun onDestroy() {
         unregisterReceiver(pkgReceiver)
+        main.removeCallbacksAndMessages(null)
+        control.destroy()
+        glassScene?.dispose()
         io.shutdown()
         net.shutdown()
         super.onDestroy()
@@ -215,8 +216,12 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     private fun buildViews() {
         root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         val match = { FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT) }
+        scene = FrameLayout(this).apply { clipChildren = false; clipToPadding = false }
+        backdrop = FrameLayout(this)
+        root.addView(scene, match())
+        scene.addView(backdrop, match())
         bg = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
-        root.addView(bg, match())
+        backdrop.addView(bg, match())
 
         val dm = resources.displayMetrics
         sw = dm.widthPixels
@@ -228,7 +233,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         tileH = tileW * 9 / 16
         rowPitch = (sh * 0.2463f).toInt()          // 266 px
         // The dock sits at the bottom; only the top edge of the next row peeks out below it.
-        firstRowY = sh - rowPitch - (sh * 0.055f).toInt()   // 755 px
+        firstRowY = (sh * 0.744f).toInt()          // 804 px; next row just peeks above the bottom edge
         expandedRowY = (sh * 0.36f).toInt()
 
         // The dock hugs the first row: a focused tile (scaled 1.115) nearly touches its edges.
@@ -237,26 +242,15 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         dockRadius = dp(11) + pad.toFloat()
         buildShelf(side)
         dock = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_XY }
-        root.addView(dock, FrameLayout.LayoutParams(dockRect.width(), dockRect.height()).apply {
+        scene.addView(dock, FrameLayout.LayoutParams(dockRect.width(), dockRect.height()).apply {
             leftMargin = dockRect.left; topMargin = dockRect.top
         })
 
-        // Header: date + clock on the left, buttons on the right. It scrolls with the grid.
+        // A persistent status row, also visible over Top Shelf and the expanded app grid.
         header = FrameLayout(this).apply { clipChildren = false; clipToPadding = false }
-        dateText = text(20f, bold = true).apply { setShadowLayer(dp(8).toFloat(), 0f, 0f, Color.argb(60, 0, 0, 0)) }
-        clockText = TextView(this).apply {
-            setTextColor(Color.WHITE)
-            typeface = Fonts.inter(this@HomeActivity, 250)
-            textSize = 118f
-            includeFontPadding = false
-            letterSpacing = -0.02f
+        clockText = text(14f, weight = 600).apply {
+            setShadowLayer(dp(5).toFloat(), 0f, dp(1).toFloat(), Color.argb(140, 0, 0, 0))
         }
-        header.addView(dateText, FrameLayout.LayoutParams(-2, -2).apply {
-            leftMargin = side; topMargin = (sh * 0.197f).toInt()
-        })
-        header.addView(clockText, FrameLayout.LayoutParams(-2, -2).apply {
-            leftMargin = side - dp(4); topMargin = (sh * 0.243f).toInt()
-        })
         val icons = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -269,19 +263,32 @@ class HomeActivity : Activity(), TileAdapter.Listener {
             runCatching { startActivity(tv.wifiIntent().addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
         }
         ccButton = IconButton(this, R.drawable.ic_toggles) { control.open() }
-        icons.addView(netButton, LinearLayout.LayoutParams(dp(36), dp(36)).apply { marginEnd = dp(8) })
-        icons.addView(ccButton, LinearLayout.LayoutParams(dp(36), dp(36)))
+        netButton.contentDescription = "网络设置"
+        ccButton.contentDescription = "控制中心"
+        icons.addView(clockText, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(10) })
+        icons.addView(netButton, LinearLayout.LayoutParams(dp(28), dp(28)).apply { marginEnd = dp(6) })
+        icons.addView(ccButton, LinearLayout.LayoutParams(dp(28), dp(28)))
+        avatar = IconButton(this, R.drawable.profile_avatar, portrait = true) {
+            startActivity(Intent(this, SettingsActivity::class.java))
+        }.apply {
+            id = View.generateViewId()
+            contentDescription = "主屏幕设置"
+            visibility = if (prefs.showAvatar) View.VISIBLE else View.GONE
+        }
+        icons.addView(avatar, LinearLayout.LayoutParams(dp(28), dp(28)).apply { marginStart = dp(6) })
         header.addView(icons, FrameLayout.LayoutParams(-2, -2, Gravity.END or Gravity.TOP).apply {
-            rightMargin = side - dp(16); topMargin = (sh * 0.083f - dp(26)).toInt()
+            rightMargin = dp(32); topMargin = dp(26)
         })
-        listOf(netButton, ccButton).forEach { b ->
+        listOf(netButton, ccButton, avatar).forEach { b ->
             b.setOnKeyListener { _, code, e ->
                 if (e.action == KeyEvent.ACTION_DOWN && code == KeyEvent.KEYCODE_DPAD_DOWN) { focusAt(focusedPos); true } else false
             }
         }
         netButton.nextFocusRightId = View.generateViewId().also { ccButton.id = it }
         ccButton.nextFocusLeftId = View.generateViewId().also { netButton.id = it }
-        root.addView(header, match())
+        ccButton.nextFocusRightId = avatar.id
+        avatar.nextFocusLeftId = ccButton.id
+        scene.addView(header, match())
 
         adapter = TileAdapter(repo, tileW, tileH, this).apply { setHasStableIds(true); dockCount = cols }
         grid = RecyclerView(this).apply {
@@ -323,14 +330,17 @@ class HomeActivity : Activity(), TileAdapter.Listener {
                 // move the grid with dy = 0, so a running sum of dy drifts away from the truth.
                 scrollY = gridOffset() ?: (scrollY + dy)
                 val off = scrollY.toFloat()
-                header.translationY = -off
-                header.alpha = (1f - off / (rowPitch * 1.6f)).coerceIn(0f, 1f)
                 // The glass was baked for its resting place, so it fades out quickly once it moves.
                 dock.translationY = -off
                 dock.alpha = (1f - off / (rowPitch * 0.7f)).coerceIn(0f, 1f)
             }
         })
-        root.addView(grid, match())
+        scene.addView(grid, match())
+        header.bringToFront()
+        root.viewTreeObserver.addOnPreDrawListener {
+            if (::control.isInitialized && (scene.isDirty || scene.hasTransientState())) control.invalidateLiveScene()
+            true
+        }
         setContentView(root)
     }
 
@@ -368,6 +378,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
                     fade.startTransition(1200)
                 }
                 bgPhoto = next
+                root.postDelayed({ if (!isDestroyed) control.refreshGlass() }, 1250)
             }
         }
     }
@@ -413,7 +424,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         shelf.addView(shelfDots, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.END).apply {
             rightMargin = side; bottomMargin = above + dp(4)
         })
-        root.addView(shelf, FrameLayout.LayoutParams(-1, -1))
+        backdrop.addView(shelf, FrameLayout.LayoutParams(-1, -1))
     }
 
     private fun showShelf(pkg: String) {
@@ -422,7 +433,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
             val items = Shelf.items(pkg)
             val first = items.firstOrNull()?.let { Shelf.image(this, it.image) }
             main.post {
-                if (shelfPkg != pkg || first == null) return@post
+                if (shelfPkg != pkg || first == null || control.isOpen) return@post
                 shelfItems = items
                 shelfSource.text = Shelf.sourceName(pkg)
                 shelfDots.removeAllViews()
@@ -449,7 +460,10 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         pic.alpha = 0f
         pic.scaleX = 1.04f; pic.scaleY = 1.04f
         pic.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(if (old == null) 0 else 700).setInterpolator(Motion.ease)
-            .withEndAction { if (old != null) shelfPics.removeView(old) }.start()
+            .withEndAction {
+                if (old != null) shelfPics.removeView(old)
+                if (old != null) control.refreshGlass()
+            }.start()
         shelfInfo.animate().cancel()
         shelfInfo.alpha = 0f
         shelfInfo.translationY = dp(10).toFloat()
@@ -482,18 +496,8 @@ class HomeActivity : Activity(), TileAdapter.Listener {
                     shelfPics.removeAllViews()
                     shelfFront = null
                 }
+                if (!isDestroyed) control.refreshGlass()
             }.start()
-        // The clock gives way to the shelf.
-        shelfFade?.cancel()
-        shelfFade = ValueAnimator.ofFloat(shelfFrac, if (v) 1f else 0f).apply {
-            duration = 350
-            addUpdateListener {
-                shelfFrac = it.animatedValue as Float
-                clockText.alpha = 1f - shelfFrac
-                dateText.alpha = 1f - shelfFrac
-            }
-            start()
-        }
         if (!v) homeDock?.let { setDock(it, 450) }
     }
 
@@ -505,10 +509,33 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         setShelfVisible(false)
     }
 
+    fun pauseShelfRotation() {
+        main.removeCallbacks(shelfShow)
+        main.removeCallbacks(shelfAdvance)
+    }
+
+    fun resumeShelfRotation() {
+        if (shelfShown) {
+            main.removeCallbacks(shelfAdvance)
+            main.postDelayed(shelfAdvance, SHELF_SECONDS * 1000L)
+        }
+    }
+
     private fun updateClock() {
         val now = Date()
-        dateText.text = SimpleDateFormat("M月d日EEEE", Locale.CHINA).format(now)
-        clockText.text = SimpleDateFormat("HH:mm", Locale.CHINA).format(now)
+        clockText.text = SimpleDateFormat("h:mm a", Locale.US).format(now)
+    }
+
+    /** Only the home scene, excluding every control-center view and dialog. */
+    fun invalidateGlassSource() { glassScene?.invalidate() }
+
+    fun drawGlassScene(canvas: Canvas) {
+        if (android.os.Build.VERSION.SDK_INT < 31 || !canvas.isHardwareAccelerated) {
+            scene.draw(canvas)
+            return
+        }
+        val live = glassScene ?: LiveGlass(scene).also { glassScene = it }
+        live.draw(canvas)
     }
 
     private fun updateNetworkIcon() {
@@ -792,6 +819,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
 
     override fun onResume() {
         super.onResume()
+        avatar.visibility = if (prefs.showAvatar) View.VISIBLE else View.GONE
         prefs.homeInFront = true
         HomeGuardService.onHomeResumed()
         restartIdle()
@@ -800,7 +828,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         main.removeCallbacks(ticker)
         ticker.run()
         control.refresh()
-        if (shelfShown) main.postDelayed(shelfAdvance, SHELF_SECONDS * 1000L)
+        if (shelfShown && !control.isOpen) resumeShelfRotation()
     }
 
     override fun onPause() {
@@ -856,8 +884,11 @@ class ShelfScrim : Drawable() {
 }
 
 /** Round glyph button for the top-right corner; fills white when focused. */
-class IconButton(ctx: Context, icon: Int, onClick: () -> Unit) : FrameLayout(ctx) {
-    private val img = ImageView(ctx).apply { setImageResource(icon) }
+class IconButton(ctx: Context, icon: Int, private val portrait: Boolean = false, onClick: () -> Unit) : FrameLayout(ctx) {
+    private val img = ImageView(ctx).apply {
+        setImageResource(icon)
+        if (portrait) { scaleType = ImageView.ScaleType.CENTER_CROP; clipRounded(ctx.dp(12).toFloat()) }
+    }
     private val disc = android.graphics.drawable.GradientDrawable().apply {
         shape = android.graphics.drawable.GradientDrawable.OVAL
         setColor(Color.TRANSPARENT)
@@ -867,11 +898,12 @@ class IconButton(ctx: Context, icon: Int, onClick: () -> Unit) : FrameLayout(ctx
         isFocusable = true
         isClickable = true
         background = disc
-        addView(img, LayoutParams(ctx.dp(20), ctx.dp(20), Gravity.CENTER))
+        val size = ctx.dp(if (portrait) 24 else 16)
+        addView(img, LayoutParams(size, size, Gravity.CENTER))
         setOnClickListener { onClick() }
         setOnFocusChangeListener { _, f ->
             disc.setColor(if (f) Color.WHITE else Color.TRANSPARENT)
-            img.setColorFilter(if (f) Color.BLACK else Color.WHITE)
+            if (!portrait) img.setColorFilter(if (f) Color.BLACK else Color.WHITE)
             animate().scaleX(if (f) 1.1f else 1f).scaleY(if (f) 1.1f else 1f).setDuration(150).start()
         }
     }

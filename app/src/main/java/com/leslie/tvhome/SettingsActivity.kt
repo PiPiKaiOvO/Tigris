@@ -87,6 +87,7 @@ class SettingsActivity : Activity() {
 
     private fun main() {
         heading.text = "主屏幕设置"
+        row("显示右上角头像", { onOff(prefs.showAvatar) }) { prefs.showAvatar = !prefs.showAvatar }
         row("待机时自动释放内存", { onOff(prefs.cleanOnStandby) }) { prefs.cleanOnStandby = !prefs.cleanOnStandby }
         row("定时释放内存", { if (prefs.cleanIntervalHours == 0) "关闭" else "每 ${prefs.cleanIntervalHours} 小时" }) {
             val opts = listOf(0, 2, 4, 8)
@@ -143,7 +144,7 @@ class SettingsActivity : Activity() {
             prefs.saverMode = if (prefs.saverMode == Prefs.SAVER_AERIAL) Prefs.SAVER_PHOTOS else Prefs.SAVER_AERIAL
         }
         row("空闲多久显示相框", { minutesLabel(idleMinutes()) }) { v ->
-            val opts = listOf(5, 10, 15, 30)
+            val opts = listOf(1, 3, 5, 10, 15, 30)
             val next = opts[(opts.indexOf(idleMinutes()) + 1) % opts.size]
             v.text = "正在设置…"
             Thread {
@@ -268,7 +269,7 @@ class SettingsActivity : Activity() {
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BACK && page != Page.MAIN) {
-            val back = when (page) { Page.KEEP -> 3; Page.HIDDEN -> 5; else -> 6 }
+            val back = when (page) { Page.KEEP -> 4; Page.HIDDEN -> 6; else -> 7 }
             show(Page.MAIN, back)
             return true
         }
