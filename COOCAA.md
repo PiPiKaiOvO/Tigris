@@ -3,10 +3,10 @@
 > Fork of [lesnolie/Tigris](https://github.com/lesnolie/Tigris) v1.9 (`4b56387`), adding API 26
 > support and Coocaa / Skyworth adaptations. 中文说明见下。
 
-这个 fork 把 Tigris 回移到 **API 26（Android 8.0）**，并适配**酷开/创维电视**。
-不同机型、固件的组件名可能不同，需要按实际固件核对。
+这个 fork 把 Tigris 回移到 **API 26（Android 8.0）**，并适配**创维 7S710_A3（酷开 OS）**。
+其他酷开/创维机型的组件名可能不同，需要按实际固件核对。
 
-已在酷开/创维 Android 8.0 电视上验证：主页键、冷启动、输入源切换、24 小时制时钟均正常。
+已在 7S710_A3（Android 8.0）上验证：主页键、冷启动、输入源切换、24 小时制时钟均正常。
 
 ## 为什么需要这个 fork
 
@@ -125,7 +125,7 @@ Intent("coocaa.intent.action.SOURCE_DIALOG")
 - 打开信号源选择器后，如果按返回时 Tigris 已被后台清理，会落到上一个应用（不会回到酷开桌面）；
   再按主页即可。
 - 应用内“本地 ADB”能力（卸载应用、关机）随权限一起被移除，Tigris 设置里的授权提示可以忽略。
-- 只在 Android 8.0 的酷开/创维固件上验证；其他机型需按固件核对组件名。
+- 只在 7S710_A3（Android 8.0）上验证；同代酷开/创维可能通用，需按固件核对组件名。
 
 ## 回滚
 
