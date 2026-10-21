@@ -751,6 +751,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
                     ?: when {
                         list.isEmpty() -> "无法读取电视的输入源"
                         list.first().uri.startsWith("tcl-input://") -> "TCL 信号源选择器"
+                        list.first().uri.startsWith("coocaa-input://") -> "酷开信号源选择器"
                         list.first().uri.startsWith("extInput:") -> "当前：主屏幕"
                         else -> "${list.size} 个 HDMI 输入"  // Android can't tell which one is showing
                     }

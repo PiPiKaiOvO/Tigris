@@ -53,7 +53,9 @@ class TvControls(private val ctx: Context) {
         val sony = Bravia.inputs()
         if (sony.isNotEmpty()) return sony
         val android = androidInputs()
-        return if (android.isNotEmpty()) android else Tcl.inputs(ctx)
+        if (android.isNotEmpty()) return android
+        val tcl = Tcl.inputs(ctx)
+        return if (tcl.isNotEmpty()) tcl else Coocaa.inputs(ctx)
     }
 
     /** Uri of the HDMI input being shown; only Sony reports it. */
@@ -61,6 +63,7 @@ class TvControls(private val ctx: Context) {
 
     fun setInput(i: Bravia.Input) {
         if (i.uri.startsWith(Tcl.URI_PREFIX)) { Tcl.setInput(ctx); return }
+        if (i.uri.startsWith(Coocaa.URI_PREFIX)) { Coocaa.setInput(ctx); return }
         if (i.uri.startsWith(Xiaomi.URI_PREFIX)) { Xiaomi.setInput(ctx, i.uri); return }
         if (!i.uri.startsWith("content:")) { Bravia.setInput(i.uri); return }
         // Android's way to show an HDMI input: open its passthrough channel in the TV's own player.
@@ -136,6 +139,34 @@ private object Tcl {
     private fun start(ctx: Context, i: Intent): Boolean = runCatching {
         ctx.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); true
     }.getOrElse { Log.w("TvControls", "TCL start failed for $i", it); false }
+}
+
+/**
+ * Coocaa / Skyworth China firmware (com.tianci.movieplatform).
+ *
+ * - Inputs: no TvInputService is registered either, so [androidInputs] is empty; the stock home
+ *   owns the ports and ships a signal-source picker.
+ * - The picker is singleTask in the stock home's task, so starting it normally would let Back
+ *   drop the user on Coocaa's own home. CLEAR_TASK makes it the root of that task instead.
+ */
+private object Coocaa {
+    const val URI_PREFIX = "coocaa-input://"
+    private const val HOME_PKG = "com.tianci.movieplatform"
+    private const val PICKER = "com.ccos.cooui.homepage.tvsource.SourceDialogActivity"
+
+    private fun installed(ctx: Context) =
+        runCatching { ctx.packageManager.getPackageInfo(HOME_PKG, 0); true }.getOrDefault(false)
+
+    fun inputs(ctx: Context): List<Bravia.Input> =
+        if (installed(ctx)) listOf(Bravia.Input(URI_PREFIX, "酷开信号源", "", false)) else emptyList()
+
+    fun setInput(ctx: Context) {
+        val i = Intent("coocaa.intent.action.SOURCE_DIALOG")
+            .setComponent(ComponentName(HOME_PKG, PICKER))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        runCatching { ctx.startActivity(i) }
+            .onFailure { Log.w("TvControls", "Coocaa source picker failed", it) }
+    }
 }
 
 /**

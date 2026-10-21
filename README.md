@@ -83,6 +83,7 @@ Agent 会按 [AGENTS.md](AGENTS.md) 一步步完成：连接电视、安装、�
 - **本机调试授权**：App 会连接电视自己的 adb（`127.0.0.1:5555`，基于 [dadb](https://github.com/mobile-dev-inc/dadb)）来执行系统命令。前提是电视在开发者选项里打开了"网络调试 / ADB 调试"。首次使用时电视会弹出"允许调试吗？"，勾选"始终允许"即可。这个机制在各品牌电视上都通用。
 - **索尼**：电视有 BRAVIA IP 控制接口（`http://127.0.0.1/sony/`）时，亮度、音量和输入源都走这个接口。
 - **TCL / 雷鸟国行固件**（社区在雷鸟 75R685C 上验证，[#1](https://github.com/lesnolie/Tigris/pull/1)）：系统没有注册标准输入源，输入源一栏会打开 TCL 自己的信号源选择器；"系统设置"打开 TCL 设置；没有可用的背光接口，亮度滑条隐藏。这类固件拒绝 `adb install`（`INSTALL_FAILED_VERIFICATION_FAILURE`），另一个第三方桌面保持启用时，冷启动后可能弹出桌面选择，用 `pm disable-user` 停用它即可。
+- **创维 / 酷开国行固件**（社区在 7S710_A3 上验证）：系统没有注册标准输入源，输入源一栏显示「酷开信号源」，打开酷开自带的信号源选择器（游戏机 / HDMI / 视频 / 射频输入）。选择器和原桌面共用任务栈，Tigris 以独立任务启动它，按返回会回到 Tigris。
 - **小米 / Redmi 国行固件**（按 [Aerial](https://github.com/pengchujin/aerial-tv) 的机型笔记移植，我们没有实机验证）：背光走 `picture_backlight`，输入源走小米播放器，"系统设置"和 Wi-Fi 打开小米自己的设置；小米应用商店、高清播放器、米家这些没有标准启动入口的系统 App 也会出现在主屏幕上。小米显示自己的（带广告的）屏保而不是 Android 的，Tigris 会在它出现前 15 秒先打开相框。
 - **其他品牌**：自动改用 Android 标准接口。音量用 `AudioManager`；输入源用 `TvInputManager` 列出 HDMI 口，再交给系统的电视播放器切换。Android 没有调背光的标准接口，所以亮度滑条会隐藏。用功放（ARC/eARC）时，标准音量调的可能是电视本身而不是功放。
 
