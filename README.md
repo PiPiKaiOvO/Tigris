@@ -58,11 +58,12 @@ Agent 会按 [AGENTS.md](AGENTS.md) 一步步完成：连接电视、安装、�
 
 - **本机调试授权**：App 会连接电视自己的 adb（`127.0.0.1:5555`，基于 [dadb](https://github.com/mobile-dev-inc/dadb)）来执行系统命令。前提是电视在开发者选项里打开了"网络调试 / ADB 调试"。首次使用时电视会弹出"允许调试吗？"，勾选"始终允许"即可。这个机制在各品牌电视上都通用。
 - **索尼**：电视有 BRAVIA IP 控制接口（`http://127.0.0.1/sony/`）时，亮度、音量和输入源都走这个接口。
+- **TCL / 雷鸟国行固件**（社区在雷鸟 75R685C 上验证，[#1](https://github.com/lesnolie/Tigris/pull/1)）：系统没有注册标准输入源，输入源一栏会打开 TCL 自己的信号源选择器；"系统设置"打开 TCL 设置；没有可用的背光接口，亮度滑条隐藏。这类固件拒绝 `adb install`（`INSTALL_FAILED_VERIFICATION_FAILURE`），另一个第三方桌面保持启用时，冷启动后可能弹出桌面选择，用 `pm disable-user` 停用它即可。
 - **其他品牌**：自动改用 Android 标准接口。音量用 `AudioManager`；输入源用 `TvInputManager` 列出 HDMI 口，再交给系统的电视播放器切换。Android 没有调背光的标准接口，所以亮度滑条会隐藏。用功放（ARC/eARC）时，标准音量调的可能是电视本身而不是功放。
 
 ### 国产电视（非原生 Android TV 系统）
 
-小米、TCL、海信、创维等国产电视大多只认自家桌面：按主页键会回到自带桌面，待机时还会清理第三方 App。我们没有这些电视，没法验证，所以 App 里没有内置对付它们的功能。[AGENTS.md](AGENTS.md#10-tvs-whose-system-fights-third-party-launchers) 里写了一套按"先温和、后强硬"排列的处理办法，全程不需要 root，也不卸载、不停用系统应用；Agent 会在你的电视上逐层尝试，哪一层管用就停在哪一层。
+小米、TCL、海信、创维等国产电视大多只认自家桌面：按主页键会回到自带桌面，待机时还会清理第三方 App。除了上面 TCL 的控制中心适配，我们没有这些电视，没法验证，所以 App 里没有内置对付它们的功能。[AGENTS.md](AGENTS.md#10-tvs-whose-system-fights-third-party-launchers) 里写了一套按"先温和、后强硬"排列的处理办法，全程不需要 root，也不卸载、不停用系统应用；Agent 会在你的电视上逐层尝试，哪一层管用就停在哪一层。
 
 ### 想兼容其他品牌电视
 

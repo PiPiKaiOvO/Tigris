@@ -331,7 +331,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
 
     /**
      * iOS-style capsule slider: the white fill is the value. Left/right change it,
-     * and the TV is updated a moment after the last key press.
+     * and the TV follows while the key is held.
      */
     private inner class Slider(
         icon: Int,
@@ -351,7 +351,21 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         // Logical target drives hardware writes; displayedValue is visual-only and animates between targets.
         private var displayedValue = 0f
         private var valueAnimator: android.animation.ValueAnimator? = null
-        private val push = Runnable { val v = value; io.execute { send(v) } }
+        // One write in flight at a time; presses that land meanwhile collapse into the latest value,
+        // so holding the key changes the TV as fast as it can take it (BRAVIA: ~45 ms per write).
+        private var sending = false
+        private var sent = Int.MIN_VALUE
+
+        private fun push() {
+            if (sending || value == sent) return
+            sending = true
+            val v = value
+            sent = v
+            io.execute {
+                send(v)
+                host.post { sending = false; push() }
+            }
+        }
 
         init {
             isFocusable = true
@@ -379,8 +393,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
                     } else {
                         value = nv
                         animateValueTo(value)
-                        removeCallbacks(push)
-                        postDelayed(push, 150)
+                        push()
                     }
                 }
                 true
@@ -396,6 +409,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
                 min = level.min
                 max = level.max
                 value = level.value.coerceIn(min, max)
+                sent = value
                 // The first asynchronous read fills in smoothly from the minimum.
                 if (!wasReady) displayedValue = min.toFloat()
                 if (!wasReady || value != oldTarget) animateValueTo(value) else draw()
