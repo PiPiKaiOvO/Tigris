@@ -7,6 +7,11 @@ import android.content.SharedPreferences
 class Prefs(ctx: Context) {
     private val sp: SharedPreferences = ctx.getSharedPreferences("tvhome", Context.MODE_PRIVATE)
 
+    /** Show the default profile portrait beside the home-screen clock and controls. */
+    var showAvatar: Boolean
+        get() = sp.getBoolean("show_avatar", true)
+        set(v) = sp.edit().putBoolean("show_avatar", v).apply()
+
     var order: List<String>
         get() = sp.getString("order", "")!!.split(',').filter { it.isNotEmpty() }
         set(v) = sp.edit().putString("order", v.joinToString(",")).apply()

@@ -5,14 +5,11 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ColorFilter
-import android.graphics.ColorMatrix
-import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
-import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.RectF
 import android.graphics.drawable.Drawable
-import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -20,71 +17,160 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import java.util.concurrent.Executors
-import kotlin.math.max
 import kotlin.math.roundToInt
 
-/**
- * The tvOS Control Center: a frosted-glass panel in the top-right corner with
- * the clock, a row of round icon buttons, brightness and volume sliders and
- * the input source. Opened with Back (or Menu) on the home screen, or the
- * toggles icon in the top-right.
- */
+/** Independent refracting glass controls floating over the home screen. */
 class ControlCenter(private val home: HomeActivity, private val host: FrameLayout) {
     private val ctx = home
     private val prefs = Prefs(ctx)
-    private val radius = ctx.dp(34).toFloat()
-    private val width = ctx.dp(440)
-
+    private val gap = ctx.dp(12)
+    private val cell = ctx.dp(47)
+    private val width = cell * 4 + gap * 3
+    private val useLiveGlass = Build.VERSION.SDK_INT >= 31
+    private val surfaces = ArrayList<GlassSurface>()
+    @Volatile private var glassGeneration = 0
+    private var destroyed = false
+    private var refreshing = false
+    private var glassReady = false
+    private val glassIo = Executors.newSingleThreadExecutor()
+    private val prepareGlass = Runnable { prepareGlassNow() }
     private val scrim = View(ctx).apply {
-        setBackgroundColor(Color.argb(70, 0, 0, 0))
+        setBackgroundColor(Color.argb(32, 0, 0, 0))
         alpha = 0f
         translationZ = ctx.dp(100).toFloat()
     }
-    private val glass = GlassDrawable()
+    // Layout only: the gaps between controls show the actual wallpaper, with no enclosing panel.
     private val panel = LinearLayout(ctx).apply {
         orientation = LinearLayout.VERTICAL
-        background = glass
         clipChildren = false
         clipToPadding = false
-        setPadding(ctx.dp(26), ctx.dp(22), ctx.dp(26), ctx.dp(24))
-        outlineProvider = android.view.ViewOutlineProvider.BACKGROUND
-        elevation = ctx.dp(30).toFloat()
-        translationZ = ctx.dp(100).toFloat()
-        alpha = 0f
+        translationZ = ctx.dp(101).toFloat()
+        visibility = View.INVISIBLE
+        alpha = 1f
     }
-    private val clock = ctx.text(30f, weight = 600).apply { letterSpacing = -0.01f }
-    private val date = ctx.text(15f, Color.argb(160, 255, 255, 255), weight = 500)
-    private val memButton: RoundButton
+    // One pass draws the shared blur through all button shapes. Individual buttons draw only
+    // their tint/rim, so the TV does not composite the same blurred scene ten times per frame.
+    private val liveLayer = object : View(ctx) {
+        private val mask = android.graphics.Path()
+        private val box = RectF()
+        private val toWindow = android.graphics.Matrix()
+        private val fromWindow = android.graphics.Matrix()
+        private val lightMatrix = android.graphics.Matrix()
+        // Unit-radius light, moved and sized with a local matrix instead of a new shader per frame.
+        private val pool = android.graphics.RadialGradient(0f, 0f, 1f,
+            intArrayOf(Color.argb(60, 255, 255, 255), Color.argb(95, 255, 255, 255), Color.argb(40, 255, 255, 255), Color.TRANSPARENT),
+            floatArrayOf(0f, 0.32f, 0.6f, 1f), android.graphics.Shader.TileMode.CLAMP)
+        private val edge = android.graphics.RadialGradient(0f, 0f, 1f,
+            intArrayOf(Color.argb(230, 255, 255, 255), Color.TRANSPARENT),
+            null, android.graphics.Shader.TileMode.CLAMP)
+        // Added rather than layered on: the glass glows brighter in its own colours instead of turning milky.
+        private val lightPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { blendMode = android.graphics.BlendMode.PLUS }
+        init { visibility = View.INVISIBLE; translationZ = ctx.dp(100.5f).toFloat() }
+        override fun onDraw(canvas: Canvas) {
+            mask.reset()
+            // Shapes are mapped into this layer's own coordinates, so they line up with the controls exactly.
+            fromWindow.reset()
+            transformMatrixToGlobal(fromWindow)
+            fromWindow.invert(fromWindow)
+            for (surface in surfaces) {
+                val v = surface.owner
+                if (!v.isShown || v.width == 0) continue
+                // The real on-screen shape, scale included and not cropped to the panel's bounds.
+                box.set(0f, 0f, v.width.toFloat(), v.height.toFloat())
+                toWindow.reset()
+                v.transformMatrixToGlobal(toWindow)
+                toWindow.postConcat(fromWindow)
+                toWindow.mapRect(box)
+                val radius = minOf(surface.radius * v.scaleX * panel.scaleX, box.width() / 2, box.height() / 2)
+                mask.addRoundRect(box, radius, radius, android.graphics.Path.Direction.CW)
+            }
+            val save = canvas.save()
+            canvas.clipPath(mask)
+            home.drawGlassScene(canvas)
+            if (glowA > 0f) {
+                // The focused control lights the glass around it: a pool of light spilling
+                // into its neighbours, and their rims catching it.
+                // The light is kept in panel coordinates, so it rides along with the panel's own motion.
+                toWindow.reset()
+                panel.transformMatrixToGlobal(toWindow)
+                toWindow.postConcat(fromWindow)
+                lightMatrix.setScale(glowR, glowR)
+                lightMatrix.postTranslate(glowX, glowY)
+                lightMatrix.postConcat(toWindow)
+                lightPaint.alpha = (255 * glowA).toInt()
+                lightPaint.style = Paint.Style.FILL
+                pool.setLocalMatrix(lightMatrix)
+                lightPaint.shader = pool
+                canvas.drawPaint(lightPaint)
+                lightMatrix.setScale(glowR * 2.2f, glowR * 2.2f)
+                lightMatrix.postTranslate(glowX, glowY)
+                lightMatrix.postConcat(toWindow)
+                edge.setLocalMatrix(lightMatrix)
+                lightPaint.shader = edge
+                lightPaint.style = Paint.Style.STROKE
+                lightPaint.strokeWidth = ctx.dp(2.5f).toFloat()
+                canvas.drawPath(mask, lightPaint)
+            }
+            canvas.restoreToCount(save)
+        }
+    }
+    private var glowX = 0f
+    private var glowY = 0f
+    private var glowR = 0f
+    private var glowA = 0f
+    private var glowAnim: android.animation.ValueAnimator? = null
+
+    /** Glides the light to the newly focused control. */
+    private fun glowAt(v: View, strength: Float = if (v is Slider) 0.5f else 1f) {
+        if (!useLiveGlass) return
+        if (v.width == 0) { v.post { if (v.isFocused) glowAt(v) }; return }
+        val r = android.graphics.Rect(0, 0, v.width, v.height)
+        panel.offsetDescendantRectToMyCoords(v, r)
+        val tx = r.exactCenterX()
+        val ty = r.exactCenterY()
+        val tr = maxOf(v.width, v.height) * 0.5f + ctx.dp(110)
+        val fromX = glowX; val fromY = glowY; val fromR = glowR; val fromA = glowA
+        glowAnim?.cancel()
+        glowAnim = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 300
+            interpolator = Motion.ease
+            addUpdateListener {
+                val f = it.animatedFraction
+                val fresh = fromA == 0f
+                glowX = if (fresh) tx else fromX + (tx - fromX) * f
+                glowY = if (fresh) ty else fromY + (ty - fromY) * f
+                glowR = if (fresh) tr else fromR + (tr - fromR) * f
+                glowA = fromA + (strength - fromA) * f
+                liveLayer.invalidate()
+            }
+            start()
+        }
+    }
+
+    private val memButton: GlassButton
     private val brightness: Slider
     private val volume: Slider
-    private val inputModule: Module
+    private val inputModule: GlassButton
+    private val networkModule: GlassButton
     private var inputs: List<Bravia.Input> = emptyList()
     private var volumeTarget = "speaker"
-    private val status = ctx.text(12f, Color.argb(120, 255, 255, 255))
+    private val status = ctx.text(11f, Color.argb(190, 255, 255, 255))
     private val focusables = ArrayList<View>()
     private val io = Executors.newSingleThreadExecutor()
     private val tv = TvControls(ctx)
     private val ticker = object : Runnable {
         override fun run() {
-            updateClock()
             followVolume()
-            host.postDelayed(this, if (isOpen) 2_000 else 15_000)
+            host.postDelayed(this, 2_000)
         }
     }
 
-    /** Keeps the volume slider in step with the remote's own volume keys while the panel is open. */
     private fun followVolume() {
         if (!isOpen) return
         io.execute {
             val v = tv.volume() ?: return@execute
-            host.post {
-                // Do not fight a slider the user is holding; only follow outside the panel's own input.
-                if (isOpen && !volume.hasFocus()) volume.set(v)
-            }
+            host.post { if (isOpen && !volume.hasFocus()) volume.set(v) }
         }
     }
 
@@ -92,240 +178,312 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         private set
 
     init {
-        val header = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.BOTTOM }
-        header.addView(clock)
-        header.addView(date, LinearLayout.LayoutParams(-2, -2).apply { marginStart = ctx.dp(12); bottomMargin = ctx.dp(3) })
-        panel.addView(header, LinearLayout.LayoutParams(-2, -2).apply { bottomMargin = ctx.dp(18) })
-
-        val circles = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; clipChildren = false }
-        fun circle(label: String, icon: Int, action: () -> Unit) =
-            RoundButton(label, icon, action).also {
-                focusables += it
-                circles.addView(it, LinearLayout.LayoutParams(0, -2, 1f))
-            }
-        circle("待机", R.drawable.ic_moon) { needAdb { close(); Cleaner.sleep(ctx) } }
-        circle("关机", R.drawable.ic_power) { confirm("关机", "电视会彻底断电关闭，用遥控器电源键开机。") { Cleaner.shutdown(ctx) } }
-        circle("重启", R.drawable.ic_restart) { confirm("重启", "电视会重新启动，大约需要一分钟。") { Cleaner.reboot(ctx) } }
-        memButton = circle("释放内存", R.drawable.ic_memory) { cleanNow() }
-        circle("相框", R.drawable.ic_photo) {
-            close()
-            ctx.startActivity(Intent(ctx, FrameActivity::class.java))
-            ctx.overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
+        // tvOS layout: a square power tile beside two capsules, then a row of round buttons.
+        val top = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; clipChildren = false }
+        val power = GlassButton("关机", R.drawable.ic_power, Shape.TILE) {
+            confirm("关机", "电视会彻底断电关闭，用遥控器电源键开机。") { Cleaner.shutdown(ctx) }
         }
-        circle("设置", R.drawable.ic_gear) {
+        top.addView(power, LinearLayout.LayoutParams(0, cell * 2 + gap, 1f).apply { marginEnd = gap })
+        val right = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; clipChildren = false }
+        networkModule = GlassButton("网络", R.drawable.ic_wifi, Shape.CAPSULE, accent = Color.rgb(48, 222, 239)) {
+            close()
+            runCatching { ctx.startActivity(tv.wifiIntent()) }
+        }
+        right.addView(networkModule, LinearLayout.LayoutParams(-1, cell))
+        right.addView(GlassButton("待机", R.drawable.ic_moon, Shape.CAPSULE) { needAdb { close(); Cleaner.sleep(ctx) } },
+            LinearLayout.LayoutParams(-1, cell).apply { topMargin = gap })
+        top.addView(right, LinearLayout.LayoutParams(0, -2, 1f))
+        panel.addView(top)
+
+        val utilities = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; clipChildren = false }
+        fun utility(label: String, icon: Int, action: () -> Unit): GlassButton =
+            GlassButton(label, icon, Shape.ROUND, action = action).also {
+                utilities.addView(it, LinearLayout.LayoutParams(cell, cell).apply {
+                    if (utilities.childCount > 0) marginStart = (this@ControlCenter.width - cell * 4) / 3
+                })
+            }
+        memButton = utility("清理内存", R.drawable.ic_memory) { cleanNow() }
+        utility("相框", R.drawable.ic_photo) {
+            close()
+            ctx.openFrame()
+        }
+        utility("重启", R.drawable.ic_restart) {
+            confirm("重启", "电视会重新启动，大约需要一分钟。") { Cleaner.reboot(ctx) }
+        }
+        utility("设置", R.drawable.ic_gear) {
             close()
             ctx.startActivity(Intent(ctx, SettingsActivity::class.java))
         }
-        panel.addView(circles, LinearLayout.LayoutParams(-1, -2).apply {
-            leftMargin = -ctx.dp(6); rightMargin = -ctx.dp(6)
-        })
+        panel.addView(utilities, LinearLayout.LayoutParams(-1, -2).apply { topMargin = gap })
 
         brightness = Slider(R.drawable.ic_sun, "亮度") { v -> tv.setBrightness(v) }.also { focusables += it }
-        panel.addView(brightness, LinearLayout.LayoutParams(-1, ctx.dp(54)).apply { topMargin = ctx.dp(6) })
+        panel.addView(brightness, LinearLayout.LayoutParams(-1, ctx.dp(38)).apply { topMargin = gap })
         volume = Slider(R.drawable.ic_volume, "音量", steps = 50) { v -> tv.setVolume(volumeTarget, v) }.also { focusables += it }
-        panel.addView(volume, LinearLayout.LayoutParams(-1, ctx.dp(54)).apply { topMargin = ctx.dp(12) })
-
-        inputModule = Module(R.drawable.ic_input, Color.rgb(10, 132, 255), "输入源") { pickInput() }.also { focusables += it }
-        inputModule.sub.visibility = View.VISIBLE
-        panel.addView(inputModule, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ctx.dp(14) })
-
-        panel.addView(status, LinearLayout.LayoutParams(-2, -2).apply { topMargin = ctx.dp(14); leftMargin = ctx.dp(4) })
-
-        // The focused control lights up the glass around it; the light glides to the next one.
-        host.viewTreeObserver.addOnGlobalFocusChangeListener { _, now -> if (isOpen && now != null) glowAt(now) }
+        panel.addView(volume, LinearLayout.LayoutParams(-1, ctx.dp(38)).apply { topMargin = gap })
+        inputModule = GlassButton("输入源", R.drawable.ic_input, Shape.CAPSULE) { pickInput() }
+        panel.addView(inputModule, LinearLayout.LayoutParams(-1, cell).apply { topMargin = gap })
+        panel.addView(status, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ctx.dp(10) })
+        // Keep the invisible layout measured so its glass can be prepared before opening.
+        if (useLiveGlass) host.addView(liveLayer, FrameLayout.LayoutParams(-1, -1))
+        // The host clips the panel to its bounds; the padding is room for focused controls to grow into.
+        val room = ctx.dp(16)
+        panel.setPadding(room, room, room, room)
+        host.addView(panel, FrameLayout.LayoutParams(width + room * 2, -2, Gravity.TOP or Gravity.END).apply {
+            topMargin = ctx.dp(66) - room; marginEnd = ctx.dp(32) - room
+        })
+        panel.addOnLayoutChangeListener { _, l, t, r, b, oldL, oldT, oldR, oldB ->
+            if (l != oldL || t != oldT || r != oldR || b != oldB) refreshGlass()
+        }
+        panel.post { refresh() }
+        host.viewTreeObserver.addOnGlobalFocusChangeListener { _, now ->
+            if (isOpen && now != null && focusables.contains(now)) glowAt(now)
+        }
+        // Report cleanup without expanding the button and moving every control below it.
+        status.setShadowLayer(ctx.dp(3).toFloat(), 0f, 0f, Color.BLACK)
     }
 
-    private var glowAnim: android.animation.ValueAnimator? = null
+    /** Each control owns its own background, refraction, rounded rim and focus light. */
+    private inner class GlassSurface(val owner: View, val radius: Float) : Drawable() {
+        /** How much white the focused glass takes on; sliders keep it low so their fill reads. */
+        var focusWash = 140
+        var bitmap: Bitmap? = null
+            set(value) { field?.recycle(); field = value; invalidateSelf() }
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        private val rect = RectF()
+        init { surfaces += this }
 
-    private fun glowAt(v: View) {
-        var p: View? = v
-        while (p != null && p !== panel) p = p.parent as? View
-        if (p == null) return
-        // Focus is given on open, before the panel has been laid out.
-        if (v.width == 0) { v.post { if (v.isFocused) glowAt(v) }; return }
-        val r = android.graphics.Rect(0, 0, v.width, v.height)
-        panel.offsetDescendantRectToMyCoords(v, r)
-        val fromX = glass.glowX
-        val fromY = glass.glowY
-        val fromA = glass.glow
-        glowAnim?.cancel()
-        glowAnim = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 260
-            interpolator = Motion.ease
-            addUpdateListener {
-                val f = it.animatedFraction
-                glass.glowX = if (fromA == 0f) r.exactCenterX() else fromX + (r.exactCenterX() - fromX) * f
-                glass.glowY = if (fromA == 0f) r.exactCenterY() else fromY + (r.exactCenterY() - fromY) * f
-                glass.glow = fromA + (1f - fromA) * f
-                glass.glowR = max(r.width(), r.height()) * 0.5f + ctx.dp(110)
-                panel.invalidate()
+        /** 0 = resting, 1 = focused; animated so the light swells in rather than switching. */
+        var lit = 0f
+            set(value) { field = value; invalidateSelf() }
+        private var litAnim: android.animation.ValueAnimator? = null
+        private var sheen: android.graphics.Shader? = null
+        private var rim: android.graphics.Shader? = null
+        private var spot: android.graphics.Shader? = null
+        private val r get() = minOf(radius, bounds.width() / 2f, bounds.height() / 2f)
+
+        fun light(on: Boolean) {
+            litAnim?.cancel()
+            litAnim = android.animation.ValueAnimator.ofFloat(lit, if (on) 1f else 0f).apply {
+                duration = if (on) 280 else 200
+                interpolator = Motion.ease
+                addUpdateListener { lit = it.animatedValue as Float }
+                start()
             }
-            start()
         }
-    }
 
-    // ---- glass ----------------------------------------------------------------
-
-    /**
-     * Frosted glass: a heavily blurred, saturated copy of whatever is behind the
-     * panel, a dark tint, and a hairline light edge. The blurred copy is taken
-     * once when the panel opens and drawn in screen space so it stays put while
-     * the panel slides.
-     */
-    private inner class GlassDrawable : Drawable() {
-        var blur: Bitmap? = null
-        /** Light from the focused control, in panel coordinates; [glow] is its strength 0..1. */
-        var glowX = 0f
-        var glowY = 0f
-        var glowR = 1f
-        var glow = 0f
-        private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-        private val glowEdge = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = ctx.dp(2).toFloat()
+        override fun onBoundsChange(b: android.graphics.Rect) {
+            val w = b.width().toFloat()
+            val h = b.height().toFloat()
+            if (w <= 0f || h <= 0f) return
+            // A sheen across the upper half, as light falling on a curved top surface.
+            sheen = android.graphics.LinearGradient(0f, 0f, 0f, h,
+                intArrayOf(Color.argb(70, 255, 255, 255), Color.argb(0, 255, 255, 255)),
+                floatArrayOf(0f, 0.55f), android.graphics.Shader.TileMode.CLAMP)
+            // Rim: bright where it faces the light (top left), a softer reflection bottom right.
+            rim = android.graphics.LinearGradient(0f, 0f, w, h,
+                intArrayOf(Color.WHITE, Color.argb(40, 255, 255, 255), Color.argb(40, 255, 255, 255), Color.argb(170, 255, 255, 255)),
+                floatArrayOf(0f, 0.35f, 0.65f, 1f), android.graphics.Shader.TileMode.CLAMP)
+            // The focus light: a soft glow pooled under the top left of the glass.
+            spot = android.graphics.RadialGradient(w * 0.3f, h * 0.1f, maxOf(w, h) * 0.95f,
+                intArrayOf(Color.argb(120, 255, 255, 255), Color.argb(0, 255, 255, 255)),
+                null, android.graphics.Shader.TileMode.CLAMP)
         }
-        private val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
-            colorFilter = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(1.7f) })
-        }
-        private val tint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(118, 22, 22, 24) }
-        private val edge = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = ctx.dp(1.2f).toFloat()
-        }
-        private val path = Path()
-        private val r = RectF()
 
         override fun draw(c: Canvas) {
-            r.set(bounds)
-            path.reset()
-            path.addRoundRect(r, radius, radius, Path.Direction.CW)
-            c.save()
-            c.clipPath(path)
-            val b = blur
-            if (b != null) {
-                c.drawBitmap(b, null, RectF(-panel.x, -panel.y, host.width - panel.x, host.height - panel.y), bmpPaint)
+            rect.set(bounds)
+            val r = r
+            if (!useLiveGlass) bitmap?.let { c.drawBitmap(it, null, rect, paint) }
+            // Milky body: a light wash over the blurred scene, much brighter when focused.
+            paint.color = if (!useLiveGlass && bitmap == null) Color.argb(90, 48, 52, 58)
+                else Color.argb((34 * (1f - lit)).toInt(), 0, 0, 0)
+            c.drawRoundRect(rect, r, r, paint)
+            paint.color = Color.argb((10 + focusWash * lit).toInt(), 255, 255, 255)
+            c.drawRoundRect(rect, r, r, paint)
+            paint.color = Color.WHITE
+            paint.shader = sheen
+            paint.alpha = (110 + 145 * lit).toInt()
+            c.drawRoundRect(rect, r, r, paint)
+            if (lit > 0f) {
+                paint.shader = spot
+                paint.alpha = (255 * lit).toInt()
+                c.drawRoundRect(rect, r, r, paint)
             }
-            c.drawRect(r, tint)
-            if (glow > 0f) {
-                glowPaint.shader = android.graphics.RadialGradient(glowX, glowY, glowR,
-                    intArrayOf(Color.argb((125 * glow).toInt(), 255, 255, 255), Color.argb((48 * glow).toInt(), 255, 255, 255), Color.TRANSPARENT),
-                    floatArrayOf(0f, 0.45f, 1f), android.graphics.Shader.TileMode.CLAMP)
-                c.drawRect(r, glowPaint)
-            }
-            c.restore()
-            // Specular rim: brighter along the top edge, like Liquid Glass.
-            edge.shader = android.graphics.LinearGradient(0f, r.top, 0f, r.bottom,
-                intArrayOf(Color.argb(110, 255, 255, 255), Color.argb(26, 255, 255, 255), Color.argb(50, 255, 255, 255)),
-                floatArrayOf(0f, 0.5f, 1f), android.graphics.Shader.TileMode.CLAMP)
-            val inset = edge.strokeWidth / 2
-            r.inset(inset, inset)
-            c.drawRoundRect(r, radius - inset, radius - inset, edge)
-            if (glow > 0f) {
-                // The rim catches the light where it passes close to the focused control.
-                glowEdge.shader = android.graphics.RadialGradient(glowX, glowY, glowR * 2.2f,
-                    intArrayOf(Color.argb((230 * glow).toInt(), 255, 255, 255), Color.TRANSPARENT),
-                    null, android.graphics.Shader.TileMode.CLAMP)
-                c.drawRoundRect(r, radius - inset, radius - inset, glowEdge)
-            }
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = ctx.dp(1f + 0.6f * lit).toFloat()
+            paint.shader = rim
+            paint.alpha = (150 + 105 * lit).toInt()
+            rect.inset(paint.strokeWidth / 2, paint.strokeWidth / 2)
+            c.drawRoundRect(rect, r, r, paint)
+            paint.shader = null
+            paint.alpha = 255
+            paint.style = Paint.Style.FILL
         }
-
-        override fun getOutline(outline: android.graphics.Outline) =
-            outline.setRoundRect(bounds, radius)
-
+        override fun getOutline(outline: android.graphics.Outline) = outline.setRoundRect(bounds, r)
+        fun invalidateScene() { if (isOpen) invalidateSelf() }
+        fun dispose() { bitmap = null }
         override fun setAlpha(alpha: Int) {}
         override fun setColorFilter(cf: ColorFilter?) {}
         @Deprecated("Deprecated in Java")
         override fun getOpacity() = PixelFormat.TRANSLUCENT
     }
 
-    private fun snapshotBehind(): Bitmap? = try {
-        val scale = 0.25f
-        val b = Bitmap.createBitmap((host.width * scale).toInt(), (host.height * scale).toInt(), Bitmap.Config.ARGB_8888)
-        Canvas(b).apply { scale(scale, scale); host.draw(this) }
-        Wallpapers.blurred(b, darken = 0f).also { b.recycle() }
-    } catch (e: Throwable) {
-        null
+    private fun glassFor(view: View, radius: Float): GlassSurface = GlassSurface(view, radius).also {
+        view.background = it
+        view.outlineProvider = android.view.ViewOutlineProvider.BACKGROUND
+        view.clipToOutline = true
+        // No elevation: through translucent glass the platform shadow shows a hard-edged hole.
     }
 
-    // ---- controls ---------------------------------------------------------------
+    private fun focus(view: View, glass: GlassSurface, on: Boolean, grow: Float = 1.08f) {
+        glass.light(on)
+        // The focused control lifts towards the viewer; the shared blur layer follows its shape.
+        view.animate().cancel()
+        view.animate().scaleX(if (on) grow else 1f).scaleY(if (on) grow else 1f)
+            .setDuration(if (on) 260 else 200).setInterpolator(if (on) Motion.spring else Motion.ease)
+            .setUpdateListener { if (useLiveGlass) liveLayer.invalidate() }
+            .start()
+    }
 
-    /** A round, icon-only button; its name fades in below it when focused. */
-    private inner class RoundButton(private val label: String, icon: Int, action: () -> Unit) : LinearLayout(ctx) {
-        private val size = ctx.dp(58)
-        private val disc = FrameLayout(ctx).apply {
-            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.argb(46, 255, 255, 255)) }
-        }
-        private val img = ImageView(ctx).apply { setImageResource(icon); setColorFilter(Color.WHITE) }
-        private val name = ctx.text(13f, weight = 500).apply { text = label; alpha = 0f; gravity = Gravity.CENTER; maxLines = 1 }
-        private val reset = Runnable { name.text = label; if (!isFocused) name.animate().alpha(0f).start() }
+    /** Merge layout/scene changes; slider fill animations do not invalidate the glass scene. */
+    fun refreshGlass() {
+        if (destroyed) return
+        if (useLiveGlass) { invalidateLiveScene(); return }
+        host.removeCallbacks(prepareGlass)
+        host.postDelayed(prepareGlass, 80)
+    }
 
-        init {
-            orientation = VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            clipChildren = false
-            isFocusable = true
-            isClickable = true
-            disc.addView(img, FrameLayout.LayoutParams(ctx.dp(26), ctx.dp(26), Gravity.CENTER))
-            addView(disc, LayoutParams(size, size))
-            addView(name, LayoutParams(-2, -2).apply { topMargin = ctx.dp(10) })
-            setOnClickListener { action() }
-            setOnFocusChangeListener { _, f ->
-                (disc.background as GradientDrawable).setColor(if (f) Color.WHITE else Color.argb(46, 255, 255, 255))
-                img.setColorFilter(if (f) Color.BLACK else Color.WHITE)
-                val s = if (f) 1.14f else 1f
-                disc.animate().scaleX(s).scaleY(s).translationZ(if (f) ctx.dp(10).toFloat() else 0f)
-                    .setDuration(220).setInterpolator(if (f) Motion.spring else Motion.ease).start()
-                name.animate().alpha(if (f) 1f else 0f).translationY(if (f) ctx.dp(4).toFloat() else 0f).setDuration(160).start()
+    /** Capture without overlays, then bake the real scene through every separate glass shape. */
+    private fun prepareGlassNow() {
+        if (useLiveGlass) return
+        if (destroyed || panel.width == 0 || host.width == 0) return
+        val generation = ++glassGeneration
+        val source = snapshotBehind() ?: return
+        val jobs = surfaces.filter { it.owner.visibility == View.VISIBLE && it.owner.width > 0 && it.owner.height > 0 }.map { surface ->
+            val view = surface.owner
+            var x = 0
+            var y = 0
+            var child: View = view
+            while (child !== host) {
+                x += child.left
+                y += child.top
+                child = child.parent as? View ?: break
             }
+            surface to android.graphics.Rect(x, y, x + view.width, y + view.height)
         }
-
-        /** Shows [msg] under the button for a while (in place of an Android toast); 0 = until replaced. */
-        fun flash(msg: String, ms: Long = 4000) {
-            name.text = msg
-            name.animate().alpha(1f).setDuration(120).start()
-            removeCallbacks(reset)
-            if (ms > 0) postDelayed(reset, ms)
+        val screenW = host.width
+        val screenH = host.height
+        // A correctly aligned scene sample is available immediately, even on a cold first open.
+        // The refined glass replaces it on its own worker, never behind slow TV HTTP requests.
+        if (!glassReady) {
+            jobs.forEach { (surface, rect) ->
+                val sample = Bitmap.createBitmap(rect.width(), rect.height(), Bitmap.Config.ARGB_8888)
+                Canvas(sample).drawBitmap(source, null,
+                    RectF(-rect.left.toFloat(), -rect.top.toFloat(), (screenW - rect.left).toFloat(), (screenH - rect.top).toFloat()),
+                    Paint(Paint.FILTER_BITMAP_FLAG))
+                surface.bitmap = sample
+            }
+            glassReady = true
+        }
+        glassIo.execute {
+            if (glassGeneration != generation) { source.recycle(); return@execute }
+            val baked = try {
+                jobs.map { (surface, rect) -> surface to LiquidGlass.bake(source, screenW, screenH, rect, surface.radius) }
+            } finally { source.recycle() }
+            host.post {
+                if (!destroyed && glassGeneration == generation) {
+                    baked.forEach { (surface, bitmap) -> surface.bitmap = bitmap }
+                }
+                else baked.forEach { (_, bitmap) -> bitmap.recycle() }
+            }
         }
     }
 
-    /** A wide rounded module: coloured icon badge, title, optional subtitle. */
-    private open inner class Module(icon: Int, badge: Int, label: String, action: () -> Unit) : LinearLayout(ctx) {
-        private val idle = rounded(Color.argb(40, 255, 255, 255), ctx.dp(24).toFloat())
-        private val focus = rounded(Color.WHITE, ctx.dp(24).toFloat())
-        protected val title = ctx.text(17f, weight = 600).apply { text = label }
-        val sub: TextView = ctx.text(13f, Color.argb(150, 255, 255, 255), weight = 500).apply { visibility = GONE }
-        protected val body = LinearLayout(ctx).apply { orientation = VERTICAL; gravity = Gravity.CENTER_VERTICAL }
+    fun invalidateLiveScene() {
+        if (!useLiveGlass || destroyed) return
+        home.invalidateGlassSource()
+        if (isOpen) liveLayer.invalidate()
+    }
 
+    private fun updateLiveLayer() {
+        if (!useLiveGlass) return
+        liveLayer.alpha = panel.alpha
+        liveLayer.invalidate()
+    }
+
+    private fun snapshotBehind(): Bitmap? {
+        val oldPanel = panel.alpha
+        val oldScrim = scrim.alpha
+        return try {
+            panel.alpha = 0f
+            scrim.alpha = 0f
+            // The result is blurred anyway: a quarter-size, clipped capture avoids rasterizing
+            // the full home screen on the UI thread, especially its large Top Shelf image.
+            val scale = 0.25f
+            Bitmap.createBitmap((host.width * scale).toInt(), (host.height * scale).toInt(), Bitmap.Config.ARGB_8888).also {
+                Canvas(it).apply {
+                    scale(scale, scale)
+                    val margin = ctx.dp(64)
+                    clipRect(panel.left - margin, panel.top - margin, panel.right + margin, panel.bottom + margin)
+                    host.draw(this)
+                }
+            }
+        } catch (e: RuntimeException) {
+            null
+        } finally {
+            panel.alpha = oldPanel
+            scrim.alpha = oldScrim
+        }
+    }
+
+    private enum class Shape { TILE, CAPSULE, ROUND }
+
+    private inner class GlassButton(
+        label: String,
+        icon: Int,
+        shape: Shape,
+        accent: Int = Color.WHITE,
+        action: () -> Unit,
+    ) : LinearLayout(ctx) {
+        // Capsules and circles clamp this to half their height.
+        private val glass = glassFor(this, ctx.dp(if (shape == Shape.TILE) 24 else 100).toFloat())
+        private val glyph = ImageView(ctx)
+        val title = ctx.text(12.5f, weight = 600).apply { text = label; maxLines = 1 }
+        val sub = ctx.text(10.5f, Color.argb(205, 255, 255, 255), weight = 500).apply {
+            visibility = GONE
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
         init {
-            orientation = HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            id = View.generateViewId()
+            contentDescription = label
+            focusables += this
+            orientation = if (shape == Shape.CAPSULE) HORIZONTAL else VERTICAL
+            gravity = if (shape == Shape.CAPSULE) Gravity.CENTER_VERTICAL else Gravity.CENTER
             isFocusable = true
             isClickable = true
-            background = idle
-            minimumHeight = ctx.dp(70)
-            setPadding(ctx.dp(14), ctx.dp(12), ctx.dp(20), ctx.dp(12))
-            val badgeView = FrameLayout(ctx).apply {
-                background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(badge) }
-                addView(ImageView(ctx).apply { setImageResource(icon); setColorFilter(Color.WHITE) },
-                    FrameLayout.LayoutParams(ctx.dp(22), ctx.dp(22), Gravity.CENTER))
+            if (shape == Shape.CAPSULE) setPadding(ctx.dp(13), 0, ctx.dp(10), 0)
+            val size = ctx.dp(when (shape) { Shape.TILE -> 40; Shape.CAPSULE -> 20; Shape.ROUND -> 21 })
+            addView(glyph.apply { setImageResource(icon); setColorFilter(accent) },
+                LayoutParams(size, size).apply { if (shape == Shape.CAPSULE) marginEnd = ctx.dp(9) })
+            // Round buttons are icon-only, as on tvOS; the label stays for accessibility.
+            when (shape) {
+                Shape.TILE -> addView(title, LayoutParams(-2, -2).apply { topMargin = ctx.dp(8) })
+                Shape.CAPSULE -> addView(LinearLayout(ctx).apply {
+                    orientation = VERTICAL
+                    addView(title)
+                    addView(sub, LayoutParams(-1, -2).apply { topMargin = ctx.dp(1) })
+                }, LayoutParams(0, -2, 1f))
+                Shape.ROUND -> {}
             }
-            addView(badgeView, LayoutParams(ctx.dp(42), ctx.dp(42)).apply { marginEnd = ctx.dp(14) })
-            body.addView(title)
-            body.addView(sub, LayoutParams(-2, -2).apply { topMargin = ctx.dp(4) })
-            addView(body, LayoutParams(0, -2, 1f))
             setOnClickListener { action() }
-            setOnFocusChangeListener { _, f ->
-                background = if (f) focus else idle
-                tint(f)
-                animate().scaleX(if (f) 1.05f else 1f).scaleY(if (f) 1.05f else 1f)
-                    .translationZ(if (f) ctx.dp(12).toFloat() else 0f)
-                    .setDuration(220).setInterpolator(if (f) Motion.spring else Motion.ease).start()
+            setOnFocusChangeListener { _, on ->
+                focus(this, glass, on, when (shape) { Shape.TILE -> 1.06f; Shape.CAPSULE -> 1.05f; Shape.ROUND -> 1.1f })
+                // Lit glass is bright: dark glyphs keep the focused control readable on any wallpaper.
+                val ink = Color.argb(225, 0, 0, 0)
+                glyph.setColorFilter(if (on) ink else accent)
+                title.setTextColor(if (on) ink else Color.WHITE)
+                sub.setTextColor(if (on) Color.argb(170, 0, 0, 0) else Color.argb(205, 255, 255, 255))
             }
-        }
-
-        protected open fun tint(f: Boolean) {
-            title.setTextColor(if (f) Color.BLACK else Color.WHITE)
-            sub.setTextColor(if (f) Color.argb(150, 0, 0, 0) else Color.argb(150, 255, 255, 255))
         }
     }
 
@@ -339,11 +497,15 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         private val steps: Int = 25,
         private val send: (Int) -> Unit,
     ) : FrameLayout(ctx) {
-        private val corner = ctx.dp(27).toFloat()
-        private val fill = View(ctx)
+        private val corner = ctx.dp(19).toFloat()
+        private val glass = glassFor(this, corner).apply { focusWash = 0 }
+        private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val fillClip = android.graphics.Path()
+        private var darkIcon = false
+        private var lastInteraction = 0L
         private val img = ImageView(ctx).apply { setImageResource(icon) }
-        private val nameText = ctx.text(15f, weight = 600).apply { text = label }
-        private val valueText = ctx.text(15f, weight = 600)
+        private val nameText = ctx.text(12.5f, weight = 600).apply { text = label }
+        private val valueText = ctx.text(12.5f, weight = 600)
         private var value = 0
         private var min = 0
         private var max = 100
@@ -370,16 +532,13 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         init {
             isFocusable = true
             clipRounded(corner)
-            background = rounded(Color.argb(40, 255, 255, 255), corner)
-            addView(fill, LayoutParams(0, -1))
-            addView(img, LayoutParams(ctx.dp(24), ctx.dp(24), Gravity.CENTER_VERTICAL or Gravity.START).apply { marginStart = ctx.dp(18) })
-            addView(nameText, LayoutParams(-2, -2, Gravity.CENTER_VERTICAL or Gravity.START).apply { marginStart = ctx.dp(54) })
-            addView(valueText, LayoutParams(-2, -2, Gravity.CENTER_VERTICAL or Gravity.END).apply { marginEnd = ctx.dp(20) })
+            setWillNotDraw(false)
+            contentDescription = label
+            addView(img, LayoutParams(ctx.dp(18), ctx.dp(18), Gravity.CENTER_VERTICAL or Gravity.START).apply { marginStart = ctx.dp(14) })
+            addView(nameText, LayoutParams(-2, -2, Gravity.CENTER_VERTICAL or Gravity.START).apply { marginStart = ctx.dp(41) })
+            addView(valueText, LayoutParams(-2, -2, Gravity.CENTER_VERTICAL or Gravity.END).apply { marginEnd = ctx.dp(15) })
             setOnFocusChangeListener { _, f ->
-                background = rounded(Color.argb(if (f) 70 else 40, 255, 255, 255), corner)
-                animate().scaleX(if (f) 1.05f else 1f).scaleY(if (f) 1.05f else 1f)
-                    .translationZ(if (f) ctx.dp(12).toFloat() else 0f)
-                    .setDuration(220).setInterpolator(if (f) Motion.spring else Motion.ease).start()
+                focus(this, glass, f, 1.03f)
                 draw()
             }
             setOnKeyListener { _, code, e ->
@@ -391,7 +550,9 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
                     if (nv == value) {
                         if (e.repeatCount == 0) Motion.bump(this, dir, 0)
                     } else {
+                        lastInteraction = android.os.SystemClock.uptimeMillis()
                         value = nv
+                        valueText.text = value.toString()
                         animateValueTo(value)
                         push()
                     }
@@ -402,6 +563,8 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         }
 
         fun set(level: Bravia.Level?) {
+            // An asynchronous read started before a key press must not overwrite its newer target.
+            if (ready && (sending || android.os.SystemClock.uptimeMillis() - lastInteraction < 600)) return
             val wasReady = ready
             val oldTarget = value
             ready = level != null
@@ -410,13 +573,16 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
                 max = level.max
                 value = level.value.coerceIn(min, max)
                 sent = value
-                // The first asynchronous read fills in smoothly from the minimum.
-                if (!wasReady) displayedValue = min.toFloat()
-                if (!wasReady || value != oldTarget) animateValueTo(value) else draw()
+                valueText.text = value.toString()
+                if (!wasReady) {
+                    displayedValue = value.toFloat()
+                    draw()
+                } else if (value != oldTarget) animateValueTo(value) else draw()
             } else {
                 valueAnimator?.cancel()
                 valueAnimator = null
                 displayedValue = min.toFloat()
+                valueText.text = "—"
                 draw()
             }
             alpha = if (ready) 1f else 0.45f
@@ -430,7 +596,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
                 return
             }
             valueAnimator = android.animation.ValueAnimator.ofFloat(displayedValue, end).apply {
-                duration = 240L
+                duration = 100L
                 interpolator = Motion.ease
                 addUpdateListener {
                     displayedValue = it.animatedValue as Float
@@ -452,19 +618,36 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
             draw()
         }
 
-        private fun draw() {
-            valueText.text = if (ready) displayedValue.roundToInt().toString() else "—"
-            if (width <= 0) return
-            val frac = if (ready && max > min)
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val fraction = if (ready && max > min)
                 ((displayedValue - min) / (max - min)).coerceIn(0f, 1f) else 0f
-            val w = (width * frac).toInt()
-            if (fill.layoutParams.width != w) fill.layoutParams = fill.layoutParams.apply { width = w }
-            fill.setBackgroundColor(if (isFocused) Color.WHITE else Color.argb(215, 255, 255, 255))
-            // Glyphs the fill has reached turn dark, as on iOS.
-            val dark = Color.argb(220, 0, 0, 0)
-            img.setColorFilter(if (w > ctx.dp(42)) dark else Color.WHITE)
-            nameText.setTextColor(if (w > ctx.dp(54) + nameText.width) dark else Color.WHITE)
-            valueText.setTextColor(if (w > width - ctx.dp(20)) dark else Color.WHITE)
+            fillPaint.color = Color.argb(if (isFocused) 255 else 190, 255, 255, 255)
+            val save = canvas.save()
+            fillClip.reset()
+            fillClip.addRoundRect(0f, 0f, width.toFloat(), height.toFloat(), corner, corner, android.graphics.Path.Direction.CW)
+            canvas.clipPath(fillClip)
+            canvas.drawRect(0f, 0f, width * fraction, height.toFloat(), fillPaint)
+            canvas.restoreToCount(save)
+        }
+
+        private fun draw() {
+            if (width <= 0) return
+            val fraction = if (ready && max > min)
+                ((displayedValue - min) / (max - min)).coerceIn(0f, 1f) else 0f
+            val filled = width * fraction
+            val dark = Color.argb(230, 0, 0, 0)
+            val iconIsDark = filled > ctx.dp(32)
+            if (darkIcon != iconIsDark) {
+                darkIcon = iconIsDark
+                img.setColorFilter(if (darkIcon) dark else Color.WHITE)
+            }
+            val nameColor = if (filled > ctx.dp(41) + nameText.width) dark else Color.WHITE
+            if (nameText.currentTextColor != nameColor) nameText.setTextColor(nameColor)
+            val valueColor = if (filled > width - ctx.dp(15)) dark else Color.WHITE
+            if (valueText.currentTextColor != valueColor) valueText.setTextColor(valueColor)
+            // Only drawing changes. No animated child width or per-frame text relayout.
+            invalidate()
         }
     }
 
@@ -473,23 +656,30 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
     fun open() {
         if (isOpen) return
         isOpen = true
-        glass.blur = snapshotBehind()
-        glass.glow = 0f
+        glowAnim?.cancel()
+        glowA = 0f
+        home.pauseShelfRotation()
+        panel.animate().cancel()
+        scrim.animate().cancel()
         refresh()
         home.setGridBlocked(true)
-        host.addView(scrim, FrameLayout.LayoutParams(-1, -1))
-        host.addView(panel, FrameLayout.LayoutParams(width, -2, Gravity.TOP or Gravity.END).apply {
-            topMargin = ctx.dp(26); marginEnd = ctx.dp(26)
-        })
-        panel.translationX = ctx.dp(60).toFloat()
-        panel.scaleX = 0.96f
-        panel.scaleY = 0.96f
-        panel.pivotX = width.toFloat()
-        panel.pivotY = 0f
+        if (scrim.parent == null) host.addView(scrim, FrameLayout.LayoutParams(-1, -1))
+        panel.bringToFront()
+        if (useLiveGlass) invalidateLiveScene() else if (!glassReady) prepareGlassNow()
+        panel.visibility = View.VISIBLE
+        if (useLiveGlass) liveLayer.visibility = View.VISIBLE
+        panel.alpha = 0f
+        if (useLiveGlass) liveLayer.alpha = 0f
+        panel.translationX = ctx.dp(24).toFloat()
+        panel.scaleX = 0.97f
+        panel.scaleY = 0.97f
+        panel.pivotX = panel.width - panel.paddingRight.toFloat()
+        panel.pivotY = panel.paddingTop.toFloat()
         scrim.animate().alpha(1f).setDuration(220).start()
         panel.animate().alpha(1f).translationX(0f).scaleX(1f).scaleY(1f).setDuration(320)
-            .setInterpolator(Motion.ease).setUpdateListener { panel.invalidate() }.start()
-        focusables.first().requestFocus()
+            .setInterpolator(Motion.ease).setUpdateListener { updateLiveLayer() }.start()
+        memButton.requestFocus()
+        host.removeCallbacks(ticker)
         host.post(ticker)
     }
 
@@ -500,15 +690,28 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         brightness.finishAnimation()
         volume.finishAnimation()
         scrim.animate().alpha(0f).setDuration(180).start()
-        panel.animate().alpha(0f).translationX(ctx.dp(60).toFloat()).scaleX(0.96f).scaleY(0.96f).setDuration(200)
-            .setUpdateListener { panel.invalidate() }
+        panel.animate().alpha(0f).translationX(ctx.dp(24).toFloat()).scaleX(0.97f).scaleY(0.97f).setDuration(200)
+            .setUpdateListener { updateLiveLayer() }
             .withEndAction {
                 host.removeView(scrim)
-                host.removeView(panel)
-                glass.blur?.recycle()
-                glass.blur = null
+                panel.visibility = View.INVISIBLE
+                liveLayer.visibility = View.INVISIBLE
             }.start()
         home.restoreGridFocus()
+        home.resumeShelfRotation()
+    }
+
+    fun destroy() {
+        destroyed = true
+        isOpen = false
+        ++glassGeneration
+        host.removeCallbacks(ticker)
+        host.removeCallbacks(prepareGlass)
+        panel.animate().cancel()
+        scrim.animate().cancel()
+        surfaces.forEach { it.dispose() }
+        io.shutdown()
+        glassIo.shutdown()
     }
 
     fun refocus() {
@@ -516,21 +719,31 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
     }
 
     fun refresh() {
-        updateClock()
+        if (destroyed) return
         status.text = if (prefs.adbAuthorized) "" else "本机调试未授权：关机、待机、彻底清理不可用"
         status.visibility = if (status.text.isEmpty()) View.GONE else View.VISIBLE
-        if (!isOpen) return
+        val cm = ctx.getSystemService(android.net.ConnectivityManager::class.java)
+        val caps = runCatching { cm.getNetworkCapabilities(cm.activeNetwork) }.getOrNull()
+        val wired = caps?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) == true
+        networkModule.title.text = if (wired) "有线网络" else "Wi-Fi"
+        networkModule.sub.text = if (caps == null) "未连接" else "已连接"
+        networkModule.sub.visibility = View.VISIBLE
+        if (refreshing) return
+        refreshing = true
         io.execute {
             val b = tv.brightness()
             val v = tv.volume()
             val list = tv.inputs()
             val cur = tv.currentInput()
             host.post {
+                refreshing = false
+                if (destroyed) return@post
                 brightness.set(b)
                 brightness.visibility = if (b == null) View.GONE else View.VISIBLE
                 v?.target?.takeIf { it.isNotEmpty() }?.let { volumeTarget = it }
                 volume.set(v)
                 inputs = list
+                inputModule.sub.visibility = View.VISIBLE
                 inputModule.sub.text = list.firstOrNull { it.uri == cur }?.name
                     ?: when {
                         list.isEmpty() -> "无法读取电视的输入源"
@@ -540,12 +753,6 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
                     }
             }
         }
-    }
-
-    private fun updateClock() {
-        val now = Date()
-        clock.text = SimpleDateFormat("HH:mm", Locale.CHINA).format(now)
-        date.text = SimpleDateFormat("M月d日 EEEE", Locale.CHINA).format(now)
     }
 
     private fun pickInput() {
@@ -574,12 +781,12 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
     }
 
     private fun cleanNow() {
-        memButton.flash("正在释放…", 0)
+        status.text = "正在释放内存…"
+        status.visibility = View.VISIBLE
         Thread {
             val r = Cleaner.clean(ctx.applicationContext)
             host.post {
-                // Reported under the button rather than with an Android toast.
-                memButton.flash("已释放 ${r.freedMb} MB" + if (r.viaAdb) "" else "（仅缓存）")
+                status.text = "已释放 ${r.freedMb} MB" + if (r.viaAdb) "" else "（仅缓存）"
             }
         }.start()
     }
