@@ -91,12 +91,19 @@
             </intent-filter>
         </receiver>
 
+        <!-- The 壁纸 app on the home grid: pick a background, or set one up from a phone. -->
         <activity
-            android:name=".PhoneActivity"
-            android:excludeFromRecents="true"
-            android:exported="false"
+            android:name=".WallpaperActivity"
+            android:banner="@drawable/banner_wallpaper"
+            android:exported="true"
+            android:label="@string/wallpaper_name"
             android:screenOrientation="landscape"
-            android:theme="@style/Theme.TVHome" />
+            android:theme="@style/Theme.TVHome">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity>
 
         <!-- Options set from a computer with am broadcast (see ConfigReceiver and AGENTS.md).
              Only the adb shell (and the system) hold this permission. -->

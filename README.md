@@ -52,7 +52,7 @@ Agent 会按 [AGENTS.md](AGENTS.md) 一步步完成：连接电视、安装、�
   内容来自这两个服务公开的网页接口，因为国内 App 基本不往 Android TV 的系统频道接口里写数据。
 - **控制中心**（遥控器返回键或右上角按钮）：毛玻璃面板，选中的控件会照亮周围的玻璃。包括待机、关机、重启、释放内存、相框、设置，以及亮度、音量和 HDMI 输入源。
 - **背景**：必应每日风景照，或 Wallhaven 本月热门二次元壁纸（只取全年龄），每天自动下载，可设置每 15 分钟到 1 天换一张；也可以选纯色渐变。相框屏保跟随所选的图源。
-- **用手机设置壁纸**：设置里打开「用手机设置壁纸」，手机扫码打开一个网页：
+- **壁纸**：主屏幕上的「壁纸」（或 设置 → 背景）把所有背景排成预览图，选中按一下就换，不用再一个个按过去。右边是二维码，手机扫码打开一个网页：
   - 上传手机里的照片，作为「我的照片」背景和屏保；
   - 填自己的图片链接（每行一个），电视每天自动去取。可以是一张图片的地址、每次返回不同图片的随机图接口，或者列出图片地址的网页 / JSON；
   - 选背景和屏保。
@@ -97,7 +97,7 @@ Tigris 的做法来自 [Aerial](https://github.com/pengchujin/aerial-tv) 在小�
 3. **保持 ADB 开启**（可选）：小米唤醒后会关掉 ADB 调试，Tigris 马上重新打开，方便以后升级。
 4. **TCL**：TCL 拒绝一切 `adb install`，也拒绝声明为桌面的 App。为此有一个 **guard 版**（`Tigris-guard.apk`，不声明 HOME，靠守护保持在前台），通过电视自带的「多屏互动」推送安装（[`tools/tcast-push.py`](tools/tcast-push.py)），电视上点一次「同意」即可。TCL 默认拦截第三方 App 开机自启，安装时会用 `appops` 放行。
 
-守护默认关闭。Agent 安装时会按 [AGENTS.md](AGENTS.md#10-tvs-whose-system-fights-third-party-launchers-the-home-guard) 授权并打开；也可以在 设置 → 桌面守护 里自己打开（需要先完成本机调试授权）。小米和 TCL 的部分是按 Aerial 的实机笔记移植的，我们自己没有这两种电视，遇到问题欢迎提 issue。
+守护默认关闭。Agent 安装时会按 [AGENTS.md](AGENTS.md#10-tvs-whose-system-fights-third-party-launchers-the-home-guard) 授权并打开；也可以在 设置 → 桌面守护 里自己打开（需要先完成本机调试授权）。这一项只在小米、TCL 或 Tigris 不是默认桌面的电视上出现，「保持 ADB 调试开启」只在小米上出现；索尼等原生 Android TV 上看不到它们。小米和 TCL 的部分是按 Aerial 的实机笔记移植的，我们自己没有这两种电视，遇到问题欢迎提 issue。
 
 需要电脑通过 ADB 授予的权限：
 

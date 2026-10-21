@@ -57,9 +57,11 @@ class AppRepo(private val ctx: Context) {
             for (ri in list) {
                 val ai = ri.activityInfo ?: continue
                 if (ai.packageName == ctx.packageName && (!leanback || ai.name == HomeActivity::class.java.name)) continue
-                if (byPkg[ai.packageName]?.leanback == true) continue
-                byPkg[ai.packageName] = AppEntry(
-                    ai.packageName,
+                // Tigris lists two screens of its own (settings, 壁纸); each gets a key of its own.
+                val key = if (ai.packageName == ctx.packageName && ai.name != SettingsActivity::class.java.name) ownKey(ai.name) else ai.packageName
+                if (byPkg[key]?.leanback == true) continue
+                byPkg[key] = AppEntry(
+                    key,
                     ri.loadLabel(pm).toString().trim(),
                     ComponentName(ai.packageName, ai.name),
                     leanback,
@@ -102,6 +104,12 @@ class AppRepo(private val ctx: Context) {
                 .thenComparator { a, b -> collator.compare(a.label, b.label) })
     }
 
+    /** Grid key of one of Tigris's own screens besides settings. */
+    private fun ownKey(cls: String) = ctx.packageName + ":" + cls.substringAfterLast('.')
+
+    /** A screen of Tigris itself or a pinned input: it can be moved and hidden, not deleted. */
+    fun isOwn(pkg: String) = pkg == ctx.packageName || pkg.startsWith(ctx.packageName + ":") || InputTile.isInput(pkg)
+
     fun isSystem(pkg: String): Boolean = if (InputTile.isInput(pkg)) false else try {
         (pm.getApplicationInfo(pkg, 0).flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
     } catch (e: PackageManager.NameNotFoundException) { false }
@@ -123,6 +131,8 @@ class AppRepo(private val ctx: Context) {
     }
 
     fun launchIntent(app: AppEntry): Intent? {
+        if (app.component.packageName == ctx.packageName)
+            return Intent(Intent.ACTION_MAIN).setComponent(app.component).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val i = if (app.leanback) pm.getLeanbackLaunchIntentForPackage(app.pkg) else null
         return (i ?: pm.getLaunchIntentForPackage(app.pkg) ?: Intent(Intent.ACTION_MAIN).setComponent(app.component))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
