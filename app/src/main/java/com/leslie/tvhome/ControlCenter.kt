@@ -25,6 +25,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 /**
  * The tvOS Control Center: a frosted-glass panel in the top-right corner with
@@ -68,7 +69,23 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
     private val io = Executors.newSingleThreadExecutor()
     private val tv = TvControls(ctx)
     private val ticker = object : Runnable {
-        override fun run() { updateClock(); host.postDelayed(this, 15_000) }
+        override fun run() {
+            updateClock()
+            followVolume()
+            host.postDelayed(this, if (isOpen) 2_000 else 15_000)
+        }
+    }
+
+    /** Keeps the volume slider in step with the remote's own volume keys while the panel is open. */
+    private fun followVolume() {
+        if (!isOpen) return
+        io.execute {
+            val v = tv.volume() ?: return@execute
+            host.post {
+                // Do not fight a slider the user is holding; only follow outside the panel's own input.
+                if (isOpen && !volume.hasFocus()) volume.set(v)
+            }
+        }
     }
 
     var isOpen = false
@@ -105,7 +122,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
 
         brightness = Slider(R.drawable.ic_sun, "亮度") { v -> tv.setBrightness(v) }.also { focusables += it }
         panel.addView(brightness, LinearLayout.LayoutParams(-1, ctx.dp(54)).apply { topMargin = ctx.dp(6) })
-        volume = Slider(R.drawable.ic_volume, "音量") { v -> tv.setVolume(volumeTarget, v) }.also { focusables += it }
+        volume = Slider(R.drawable.ic_volume, "音量", steps = 50) { v -> tv.setVolume(volumeTarget, v) }.also { focusables += it }
         panel.addView(volume, LinearLayout.LayoutParams(-1, ctx.dp(54)).apply { topMargin = ctx.dp(12) })
 
         inputModule = Module(R.drawable.ic_input, Color.rgb(10, 132, 255), "输入源") { pickInput() }.also { focusables += it }
@@ -316,7 +333,12 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
      * iOS-style capsule slider: the white fill is the value. Left/right change it,
      * and the TV is updated a moment after the last key press.
      */
-    private inner class Slider(icon: Int, label: String, private val send: (Int) -> Unit) : FrameLayout(ctx) {
+    private inner class Slider(
+        icon: Int,
+        label: String,
+        private val steps: Int = 25,
+        private val send: (Int) -> Unit,
+    ) : FrameLayout(ctx) {
         private val corner = ctx.dp(27).toFloat()
         private val fill = View(ctx)
         private val img = ImageView(ctx).apply { setImageResource(icon) }
@@ -326,6 +348,9 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         private var min = 0
         private var max = 100
         private var ready = false
+        // Logical target drives hardware writes; displayedValue is visual-only and animates between targets.
+        private var displayedValue = 0f
+        private var valueAnimator: android.animation.ValueAnimator? = null
         private val push = Runnable { val v = value; io.execute { send(v) } }
 
         init {
@@ -347,13 +372,13 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
                 if (code != KeyEvent.KEYCODE_DPAD_LEFT && code != KeyEvent.KEYCODE_DPAD_RIGHT) return@setOnKeyListener false
                 if (e.action == KeyEvent.ACTION_DOWN && ready) {
                     val dir = if (code == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1
-                    val step = ((max - min) / 25).coerceAtLeast(1)
+                    val step = ((max - min) / steps).coerceAtLeast(1)
                     val nv = (value + dir * step).coerceIn(min, max)
                     if (nv == value) {
                         if (e.repeatCount == 0) Motion.bump(this, dir, 0)
                     } else {
                         value = nv
-                        draw()
+                        animateValueTo(value)
                         removeCallbacks(push)
                         postDelayed(push, 150)
                     }
@@ -364,25 +389,68 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         }
 
         fun set(level: Bravia.Level?) {
+            val wasReady = ready
+            val oldTarget = value
             ready = level != null
-            if (level != null) { value = level.value; min = level.min; max = level.max }
+            if (level != null) {
+                min = level.min
+                max = level.max
+                value = level.value.coerceIn(min, max)
+                // The first asynchronous read fills in smoothly from the minimum.
+                if (!wasReady) displayedValue = min.toFloat()
+                if (!wasReady || value != oldTarget) animateValueTo(value) else draw()
+            } else {
+                valueAnimator?.cancel()
+                valueAnimator = null
+                displayedValue = min.toFloat()
+                draw()
+            }
             alpha = if (ready) 1f else 0.45f
+        }
+
+        private fun animateValueTo(target: Int) {
+            valueAnimator?.cancel()
+            val end = target.toFloat()
+            if (displayedValue == end) {
+                draw()
+                return
+            }
+            valueAnimator = android.animation.ValueAnimator.ofFloat(displayedValue, end).apply {
+                duration = 240L
+                interpolator = Motion.ease
+                addUpdateListener {
+                    displayedValue = it.animatedValue as Float
+                    draw()
+                }
+                start()
+            }
+        }
+
+        fun finishAnimation() {
+            valueAnimator?.cancel()
+            valueAnimator = null
+            displayedValue = value.toFloat()
+            draw()
+        }
+
+        override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+            super.onSizeChanged(w, h, oldw, oldh)
             draw()
         }
 
         private fun draw() {
-            valueText.text = if (ready) value.toString() else "—"
-            val frac = if (ready && max > min) (value - min).toFloat() / (max - min) else 0f
-            post {
-                val w = (width * frac).toInt()
-                fill.layoutParams = fill.layoutParams.apply { width = w }
-                fill.setBackgroundColor(if (isFocused) Color.WHITE else Color.argb(215, 255, 255, 255))
-                // Glyphs the fill has reached turn dark, as on iOS.
-                val dark = Color.argb(220, 0, 0, 0)
-                img.setColorFilter(if (w > ctx.dp(42)) dark else Color.WHITE)
-                nameText.setTextColor(if (w > ctx.dp(54) + nameText.width) dark else Color.WHITE)
-                valueText.setTextColor(if (w > width - ctx.dp(20)) dark else Color.WHITE)
-            }
+            valueText.text = if (ready) displayedValue.roundToInt().toString() else "—"
+            if (width <= 0) return
+            val frac = if (ready && max > min)
+                ((displayedValue - min) / (max - min)).coerceIn(0f, 1f) else 0f
+            val w = (width * frac).toInt()
+            if (fill.layoutParams.width != w) fill.layoutParams = fill.layoutParams.apply { width = w }
+            fill.setBackgroundColor(if (isFocused) Color.WHITE else Color.argb(215, 255, 255, 255))
+            // Glyphs the fill has reached turn dark, as on iOS.
+            val dark = Color.argb(220, 0, 0, 0)
+            img.setColorFilter(if (w > ctx.dp(42)) dark else Color.WHITE)
+            nameText.setTextColor(if (w > ctx.dp(54) + nameText.width) dark else Color.WHITE)
+            valueText.setTextColor(if (w > width - ctx.dp(20)) dark else Color.WHITE)
         }
     }
 
@@ -415,6 +483,8 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         if (!isOpen) return
         isOpen = false
         host.removeCallbacks(ticker)
+        brightness.finishAnimation()
+        volume.finishAnimation()
         scrim.animate().alpha(0f).setDuration(180).start()
         panel.animate().alpha(0f).translationX(ctx.dp(60).toFloat()).scaleX(0.96f).scaleY(0.96f).setDuration(200)
             .setUpdateListener { panel.invalidate() }
@@ -450,6 +520,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
                 inputModule.sub.text = list.firstOrNull { it.uri == cur }?.name
                     ?: when {
                         list.isEmpty() -> "无法读取电视的输入源"
+                        list.first().uri.startsWith("tcl-input://") -> "TCL 信号源选择器"
                         list.first().uri.startsWith("extInput:") -> "当前：主屏幕"
                         else -> "${list.size} 个 HDMI 输入"  // Android can't tell which one is showing
                     }
