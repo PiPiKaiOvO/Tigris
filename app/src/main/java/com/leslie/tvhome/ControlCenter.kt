@@ -65,7 +65,10 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
             intArrayOf(Color.argb(230, 255, 255, 255), Color.TRANSPARENT),
             null, android.graphics.Shader.TileMode.CLAMP)
         // Added rather than layered on: the glass glows brighter in its own colours instead of turning milky.
-        private val lightPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { blendMode = android.graphics.BlendMode.PLUS }
+        // BlendMode is API 29; minSdk is 28, so referring to it here would crash Android 9 at class init.
+        private val lightPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.ADD)
+        }
         init { visibility = View.INVISIBLE; translationZ = ctx.dp(100.5f).toFloat() }
         override fun onDraw(canvas: Canvas) {
             mask.reset()
