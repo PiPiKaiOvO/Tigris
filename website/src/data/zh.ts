@@ -1,5 +1,9 @@
 import type { Copy } from "./lang";
 import { brand, cmds } from "./site";
+import type { Cmd } from "./site";
+
+/* Local alias keeps the copy readable. */
+const C: typeof cmds = cmds;
 
 export const zh = {
     skip: "跳到主要内容",
@@ -127,8 +131,11 @@ export const zh = {
       ],
       prereq:
         "开始之前：电脑与电视在同一个局域网；电视已打开 ADB 调试；首次连接时电视会询问「允许 USB 调试吗？」，请勾选「始终允许」。电脑需要 Android SDK Platform-Tools。",
-      windowsNote:
-        "下面的命令使用不含 shell 变量的通用写法，macOS / Linux 终端、Windows PowerShell 与 CMD 都可以直接粘贴。唯一例外是 Windows：`curl` 是 `Invoke-WebRequest` 的别名，下载 APK 时请写成 `curl.exe -L -o …`；Python 脚本用 `python` 代替 `python3`。",
+      shellNote:
+        "每条命令都有两套写法，先在上面选你的系统：Windows PowerShell 会自动把下载换成 curl.exe、把 python3 换成 python；macOS / Linux 使用系统自带的 curl 与 python3。命令里不含变量，包名一律写成 com.leslie.tvhome，所以复制其中一部分也能直接运行。",
+      shellLabels: { posix: "macOS / Linux", powershell: "Windows PowerShell" },
+      placeholderNote:
+        "示例中的 192.168.x.x 是占位符，请换成电视的实际 IP；BRAVIA 注册步骤里的 PIN 是电视屏幕上显示的四位数字，请按提示替换。",
       adbTable: {
         caption: "不同品牌电视开启 ADB 调试的方式",
         head: ["电视", "怎么打开 ADB"],
@@ -162,29 +169,27 @@ export const zh = {
             {
               title: "连接电视",
               body: "在电脑上运行；电视出现授权框时选「允许」并勾选「始终允许」。",
-              cmd: cmds.connect,
+              cmd: C.connect,
             },
             {
               title: "记录原来的桌面、屏保与无障碍服务",
               body: "卸载时需要把它们恢复，请先保存到记事本。",
-              cmd: cmds.snapshotBeforeInstall,
+              cmd: C.snapshotBeforeInstall,
             },
             {
               title: "下载并安装标准版",
-              cmd: cmds.installStandard,
+              cmd: C.installStandard,
               note: "Windows PowerShell 用 `curl.exe -L -o Tigris.apk …`。",
             },
             {
               title: "设为默认桌面并授权",
               body: "三条权限分别用于：守护与屏保、被杀后复活、开机后台打开主屏幕。",
-              cmd: cmds.setHomeAndGrant,
+              cmd: C.setHomeAndGrant,
             },
             {
               title: "可选：注册 BRAVIA IP 控制",
               body: "要用亮度、电视音量和 HDMI 输入源，需要注册一次。第一条命令后电视会显示 4 位 PIN，用它完成第二条。",
-              cmd: `BODY='{"method":"actRegister","id":1,"version":"1.0","params":[{"clientid":"tvhome:1","nickname":"TVHome","level":"private"},[{"value":"yes","function":"WOL"}]]}'
-curl -s http://192.168.x.x/sony/accessControl -d "$BODY"
-curl -s -u ":PIN" http://192.168.x.x/sony/accessControl -d "$BODY"`,
+              cmd: C.braviaRegister,
               note: "这一条含 shell 变量，仅适用于 macOS / Linux 终端。",
             },
             {
@@ -193,7 +198,7 @@ curl -s -u ":PIN" http://192.168.x.x/sony/accessControl -d "$BODY"`,
             },
             {
               title: "截图验证",
-              cmd: cmds.verify,
+              cmd: C.verify,
               note: "应当看到右上角的紧凑时钟、两个圆形按钮，以及底部玻璃 Dock。",
             },
           ],
@@ -206,30 +211,30 @@ curl -s -u ":PIN" http://192.168.x.x/sony/accessControl -d "$BODY"`,
           danger:
             "部分 TCL / 雷鸟固件没有可用的背光接口，亮度滑条会隐藏；输入源一栏会打开 TCL 自己的信号源选择器。这是系统限制，不是安装失败。",
           steps: [
-            { title: "连接电视", cmd: cmds.connect },
+            { title: "连接电视", cmd: C.connect },
             {
               title: "记录原来的桌面、屏保与无障碍服务",
               body: "卸载时需要用它们恢复。",
-              cmd: cmds.snapshotBeforeInstall,
+              cmd: C.snapshotBeforeInstall,
             },
             {
               title: "用多屏互动推送 guard 版",
               body: "脚本通过本机 8765 端口提供 APK，并连接电视的 6553 端口。电视角落出现「多屏互动：正在发起应用推送」时，用遥控器选择「同意」。",
-              cmd: cmds.tclPush,
+              cmd: C.tclPush,
               note: "Windows：把 `curl` 换成 `curl.exe`，把 `python3` 换成 `python`；防火墙提示请允许 8765 端口。",
             },
             {
               title: "确认已安装",
-              cmd: cmds.packagePath,
+              cmd: C.packagePath,
             },
             {
               title: "授权并打开桌面守护",
               body: "guard 版不声明 HOME，靠「桌面守护」保持在前台。TCL 默认拦截第三方 App 开机自启，需要同时放行两个 appops。",
-              cmd: cmds.tclGrants,
+              cmd: C.tclGrants,
             },
             {
               title: "检查守护是否在运行",
-              cmd: cmds.tclCheck,
+              cmd: C.tclCheck,
               note: "输出中应包含 `com.leslie.tvhome/com.leslie.tvhome.HomeGuardService`，最后一行应是 `com.leslie.tvhome/.HomeActivity`。",
             },
           ],
@@ -242,24 +247,24 @@ curl -s -u ":PIN" http://192.168.x.x/sony/accessControl -d "$BODY"`,
           danger:
             "<strong>绝对不要停用小米自带桌面</strong>（com.mitv.tvhome）。停用后开机黑屏，只能通过 ADB 恢复。",
           steps: [
-            { title: "连接电视", cmd: cmds.connect },
+            { title: "连接电视", cmd: C.connect },
             {
               title: "记录原来的桌面、屏保与无障碍服务",
-              cmd: cmds.snapshotBeforeInstall,
+              cmd: C.snapshotBeforeInstall,
             },
             {
               title: "安装标准版",
-              cmd: cmds.installStandard,
+              cmd: C.installStandard,
               note: "Windows PowerShell 用 `curl.exe`。",
             },
             {
               title: "设为默认桌面并授权",
-              cmd: cmds.xiaomiSetup,
+              cmd: C.xiaomiSetup,
             },
             {
               title: "打开桌面守护，并保持 ADB 开启",
               body: "keep_adb true 让 Tigris 在小米唤醒后自动把 ADB 重新打开，方便以后升级；不需要可以省略这个参数。",
-              cmd: cmds.xiaomiGuard,
+              cmd: C.xiaomiGuard,
             },
             {
               title: "检查",
@@ -275,16 +280,16 @@ curl -s -u ":PIN" http://192.168.x.x/sony/accessControl -d "$BODY"`,
           steps: [
             {
               title: "连接并确认系统版本",
-              cmd: cmds.connect,
+              cmd: C.connect,
               note: "再运行 `adb -s 192.168.x.x:5555 shell getprop ro.build.version.sdk`，返回值应不小于 28（Android 9）。",
             },
             {
               title: "记录原来的桌面、屏保与无障碍服务",
-              cmd: cmds.snapshotBeforeInstall,
+              cmd: C.snapshotBeforeInstall,
             },
             {
               title: "安装并设为默认桌面",
-              cmd: cmds.stockInstall,
+              cmd: C.stockInstall,
               note: "Windows PowerShell 用 `curl.exe`。",
             },
             {
@@ -296,7 +301,7 @@ adb -s 192.168.x.x:5555 shell appops set com.leslie.tvhome SYSTEM_ALERT_WINDOW a
             {
               title: "如果按主页键仍回到原厂桌面",
               body: "先打开桌面守护再试。只有在确认电视不依赖原厂桌面、且你同意的情况下，才把停用厂商桌面当作最后手段；恢复命令也一并保存。",
-              cmd: cmds.disableVendor,
+              cmd: C.disableVendor,
               note: "小米 / Redmi 不要使用这一步。",
             },
           ],
@@ -471,7 +476,7 @@ adb -s 192.168.x.x:5555 shell appops set com.leslie.tvhome SYSTEM_ALERT_WINDOW a
 
     finalCta: {
       eyebrow: "GET TIGRIS",
-      title: "今晚，让你的电视重新值得被打开。",
+      title: "让每一次打开电视，都值得期待。",
       body: "下载 APK，打开 ADB，剩下的交给指南或一个 Agent。Android 9+，无需 root，随时可以回到原厂桌面。",
       primary: "免费下载",
       secondary: "在 GitHub 查看源码",

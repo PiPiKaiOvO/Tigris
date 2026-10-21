@@ -1,8 +1,13 @@
 /* Locale-independent values: brand facts, asset paths and shell commands.
-   Command snippets deliberately avoid shell variables ($P, $VAR) so they can
-   be pasted into zsh, bash, Windows PowerShell or CMD unchanged. The only
-   Windows differences are the curl.exe alias and `python` instead of
-   `python3`, called out next to each snippet. */
+   Two OS variants are generated from the same data so neither can drift:
+
+   - `posix`  : zsh / bash on macOS and Linux. `curl` is the real binary.
+   - `powershell` : Windows PowerShell 5.1+ and PowerShell 7. `curl` is an
+     alias for Invoke-WebRequest, so the download uses `curl.exe`. Variable
+     assignments use `$name = "value"` and are expanded by PowerShell itself.
+
+   Neither variant needs a shell variable to run: the package name is always
+   written out in full, so a partially selected line still works. */
 
 export const brand = {
   name: "TIGRIS",
@@ -23,7 +28,7 @@ export const brand = {
   tcast:
     "https://raw.githubusercontent.com/lesnolie/Tigris/main/tools/tcast-push.py",
   pkg: "com.leslie.tvhome",
-  tvIp: "192.168.x.x",
+  tvIp: "192.168.x.x", // documented placeholder: replace with the TV's IP
 } as const;
 
 /* Authentic captures optimised from TVHome/docs/screenshots by
@@ -38,76 +43,182 @@ export const shots = {
 
 export const assets = {
   beforeIllustration: "/img/before-illustration.svg",
+  aerialIllustration: "/img/aerial-illustration.svg",
   og: "/img/og.jpg",
   favicon: "/img/favicon.svg",
 } as const;
 
-const T = brand.tvIp;
+export type Shell = "posix" | "powershell";
+
 const P = brand.pkg;
-const A = `adb -s ${T}:5555`;
+
+export interface Cmd {
+  posix: string;
+  powershell: string;
+}
+
+const cmd = (posix: string, powershell: string): Cmd => ({ posix, powershell });
 
 export const cmds = {
-  snapshotBeforeInstall: `${A} shell cmd package resolve-activity -a android.intent.action.MAIN -c android.intent.category.HOME
-${A} shell settings get secure screensaver_components
-${A} shell settings get secure enabled_accessibility_services`,
+  /* Run before installing: these values are what the uninstall step restores. */
+  snapshotBeforeInstall: cmd(
+    `adb -s 192.168.x.x:5555 shell cmd package resolve-activity -a android.intent.action.MAIN -c android.intent.category.HOME
+adb -s 192.168.x.x:5555 shell settings get secure screensaver_components
+adb -s 192.168.x.x:5555 shell settings get secure enabled_accessibility_services`,
+    `adb -s 192.168.x.x:5555 shell cmd package resolve-activity -a android.intent.action.MAIN -c android.intent.category.HOME
+adb -s 192.168.x.x:5555 shell settings get secure screensaver_components
+adb -s 192.168.x.x:5555 shell settings get secure enabled_accessibility_services`,
+  ),
 
-  connect: `adb connect ${T}:5555
-${A} get-state`,
+  connect: cmd(
+    `adb connect 192.168.x.x:5555
+adb -s 192.168.x.x:5555 get-state`,
+    `adb connect 192.168.x.x:5555
+adb -s 192.168.x.x:5555 get-state`,
+  ),
 
-  installStandard: `curl -L -o Tigris.apk ${brand.apk}
-${A} install -r Tigris.apk`,
+  installStandard: {
+    posix: `curl -L -o Tigris.apk ${brand.apk}
+adb -s 192.168.x.x:5555 install -r Tigris.apk`,
+    powershell: `curl.exe -L -o Tigris.apk ${brand.apk}
+adb -s 192.168.x.x:5555 install -r Tigris.apk`,
+  },
 
-  setHomeAndGrant: `${A} shell cmd package set-home-activity ${P}/.HomeActivity
-${A} shell input keyevent KEYCODE_HOME
-${A} shell pm grant ${P} android.permission.WRITE_SECURE_SETTINGS
-${A} shell cmd notification allow_listener ${P}/${P}.RevivalListener
-${A} shell appops set ${P} SYSTEM_ALERT_WINDOW allow`,
+  setHomeAndGrant: cmd(
+    `adb -s 192.168.x.x:5555 shell cmd package set-home-activity ${P}/.HomeActivity
+adb -s 192.168.x.x:5555 shell input keyevent KEYCODE_HOME
+adb -s 192.168.x.x:5555 shell pm grant ${P} android.permission.WRITE_SECURE_SETTINGS
+adb -s 192.168.x.x:5555 shell cmd notification allow_listener ${P}/${P}.RevivalListener
+adb -s 192.168.x.x:5555 shell appops set ${P} SYSTEM_ALERT_WINDOW allow`,
+    `adb -s 192.168.x.x:5555 shell cmd package set-home-activity ${P}/.HomeActivity
+adb -s 192.168.x.x:5555 shell input keyevent KEYCODE_HOME
+adb -s 192.168.x.x:5555 shell pm grant ${P} android.permission.WRITE_SECURE_SETTINGS
+adb -s 192.168.x.x:5555 shell cmd notification allow_listener ${P}/${P}.RevivalListener
+adb -s 192.168.x.x:5555 shell appops set ${P} SYSTEM_ALERT_WINDOW allow`,
+  ),
 
-  grantOnly: `${A} shell pm grant ${P} android.permission.WRITE_SECURE_SETTINGS
-${A} shell cmd notification allow_listener ${P}/${P}.RevivalListener
-${A} shell appops set ${P} SYSTEM_ALERT_WINDOW allow`,
+  /* Sony BRAVIA IP-control registration. Both variants prompt for the PIN so
+     no secret is pasted into a shell even briefly. */
+  braviaRegister: {
+    posix: `BODY='{"method":"actRegister","id":1,"version":"1.0","params":[{"clientid":"tvhome:1","nickname":"TVHome","level":"private"},[{"value":"yes","function":"WOL"}]]}'
+curl -s http://192.168.x.x/sony/accessControl -d "$BODY"
+# The TV now shows a 4-digit PIN. Replace PIN with it and run:
+curl -s -u ":PIN" http://192.168.x.x/sony/accessControl -d "$BODY"`,
+    powershell: `$body = '{"method":"actRegister","id":1,"version":"1.0","params":[{"clientid":"tvhome:1","nickname":"TVHome","level":"private"},[{"value":"yes","function":"WOL"}]]}'
+curl.exe -s http://192.168.x.x/sony/accessControl -d $body
+# The TV now shows a 4-digit PIN. Replace PIN with it and run:
+curl.exe -s -u ":PIN" http://192.168.x.x/sony/accessControl -d $body`,
+  },
 
-  tclPush: `curl -L -o Tigris-guard.apk ${brand.apkGuard}
+  tclPush: {
+    posix: `curl -L -o Tigris-guard.apk ${brand.apkGuard}
 curl -L -o tcast-push.py ${brand.tcast}
-python3 tcast-push.py ${T} Tigris-guard.apk`,
+python3 tcast-push.py 192.168.x.x Tigris-guard.apk`,
+    powershell: `curl.exe -L -o Tigris-guard.apk ${brand.apkGuard}
+curl.exe -L -o tcast-push.py ${brand.tcast}
+python tcast-push.py 192.168.x.x Tigris-guard.apk`,
+  },
 
-  tclGrants: `${A} shell pm grant ${P} android.permission.WRITE_SECURE_SETTINGS
-${A} shell cmd notification allow_listener ${P}/${P}.RevivalListener
-${A} shell appops set ${P} SYSTEM_ALERT_WINDOW allow
-${A} shell appops set ${P} APP_AUTO_START allow
-${A} shell appops set ${P} APP_ASSOC_START allow
-${A} shell am broadcast -a ${P}.CONFIG -n ${P}/.ConfigReceiver --ez guard true`,
+  tclGrants: cmd(
+    `adb -s 192.168.x.x:5555 shell pm grant ${P} android.permission.WRITE_SECURE_SETTINGS
+adb -s 192.168.x.x:5555 shell cmd notification allow_listener ${P}/${P}.RevivalListener
+adb -s 192.168.x.x:5555 shell appops set ${P} SYSTEM_ALERT_WINDOW allow
+adb -s 192.168.x.x:5555 shell appops set ${P} APP_AUTO_START allow
+adb -s 192.168.x.x:5555 shell appops set ${P} APP_ASSOC_START allow
+adb -s 192.168.x.x:5555 shell am broadcast -a ${P}.CONFIG -n ${P}/.ConfigReceiver --ez guard true`,
+    `adb -s 192.168.x.x:5555 shell pm grant ${P} android.permission.WRITE_SECURE_SETTINGS
+adb -s 192.168.x.x:5555 shell cmd notification allow_listener ${P}/${P}.RevivalListener
+adb -s 192.168.x.x:5555 shell appops set ${P} SYSTEM_ALERT_WINDOW allow
+adb -s 192.168.x.x:5555 shell appops set ${P} APP_AUTO_START allow
+adb -s 192.168.x.x:5555 shell appops set ${P} APP_ASSOC_START allow
+adb -s 192.168.x.x:5555 shell am broadcast -a ${P}.CONFIG -n ${P}/.ConfigReceiver --ez guard true`,
+  ),
 
-  tclCheck: `${A} shell settings get secure enabled_accessibility_services
-${A} shell input keyevent KEYCODE_HOME
-${A} shell dumpsys activity activities | grep -m1 ResumedActivity`,
+  tclCheck: cmd(
+    `adb -s 192.168.x.x:5555 shell settings get secure enabled_accessibility_services
+adb -s 192.168.x.x:5555 shell input keyevent KEYCODE_HOME
+adb -s 192.168.x.x:5555 shell dumpsys activity activities | grep -m1 ResumedActivity`,
+    `adb -s 192.168.x.x:5555 shell settings get secure enabled_accessibility_services
+adb -s 192.168.x.x:5555 shell input keyevent KEYCODE_HOME
+adb -s 192.168.x.x:5555 shell "dumpsys activity activities | grep -m1 ResumedActivity"`,
+  ),
 
-  packagePath: `${A} shell pm path ${P}`,
+  packagePath: cmd(
+    `adb -s 192.168.x.x:5555 shell pm path ${P}`,
+    `adb -s 192.168.x.x:5555 shell pm path ${P}`,
+  ),
 
-  xiaomiSetup: `${A} shell cmd package set-home-activity ${P}/.HomeActivity
-${A} shell pm grant ${P} android.permission.WRITE_SECURE_SETTINGS
-${A} shell cmd notification allow_listener ${P}/${P}.RevivalListener
-${A} shell appops set ${P} SYSTEM_ALERT_WINDOW allow`,
+  xiaomiSetup: cmd(
+    `adb -s 192.168.x.x:5555 shell cmd package set-home-activity ${P}/.HomeActivity
+adb -s 192.168.x.x:5555 shell pm grant ${P} android.permission.WRITE_SECURE_SETTINGS
+adb -s 192.168.x.x:5555 shell cmd notification allow_listener ${P}/${P}.RevivalListener
+adb -s 192.168.x.x:5555 shell appops set ${P} SYSTEM_ALERT_WINDOW allow`,
+    `adb -s 192.168.x.x:5555 shell cmd package set-home-activity ${P}/.HomeActivity
+adb -s 192.168.x.x:5555 shell pm grant ${P} android.permission.WRITE_SECURE_SETTINGS
+adb -s 192.168.x.x:5555 shell cmd notification allow_listener ${P}/${P}.RevivalListener
+adb -s 192.168.x.x:5555 shell appops set ${P} SYSTEM_ALERT_WINDOW allow`,
+  ),
 
-  xiaomiGuard: `${A} shell am broadcast -a ${P}.CONFIG -n ${P}/.ConfigReceiver --ez guard true --ez keep_adb true`,
+  xiaomiGuard: cmd(
+    `adb -s 192.168.x.x:5555 shell am broadcast -a ${P}.CONFIG -n ${P}/.ConfigReceiver --ez guard true --ez keep_adb true`,
+    `adb -s 192.168.x.x:5555 shell am broadcast -a ${P}.CONFIG -n ${P}/.ConfigReceiver --ez guard true --ez keep_adb true`,
+  ),
 
-  stockInstall: `curl -L -o Tigris.apk ${brand.apk}
-${A} install -r Tigris.apk
-${A} shell cmd package set-home-activity ${P}/.HomeActivity
-${A} shell input keyevent KEYCODE_HOME`,
+  stockInstall: {
+    posix: `curl -L -o Tigris.apk ${brand.apk}
+adb -s 192.168.x.x:5555 install -r Tigris.apk
+adb -s 192.168.x.x:5555 shell cmd package set-home-activity ${P}/.HomeActivity
+adb -s 192.168.x.x:5555 shell input keyevent KEYCODE_HOME`,
+    powershell: `curl.exe -L -o Tigris.apk ${brand.apk}
+adb -s 192.168.x.x:5555 install -r Tigris.apk
+adb -s 192.168.x.x:5555 shell cmd package set-home-activity ${P}/.HomeActivity
+adb -s 192.168.x.x:5555 shell input keyevent KEYCODE_HOME`,
+  },
 
-  verify: `${A} exec-out screencap -p > tv.png`,
+  verify: cmd(
+    `adb -s 192.168.x.x:5555 exec-out screencap -p > tv.png`,
+    `adb -s 192.168.x.x:5555 exec-out screencap -p > tv.png`,
+  ),
 
-  /* Uninstall, in order: guard off, restore the recorded screensaver, remove. */
-  uninstall: `${A} shell am broadcast -a ${P}.CONFIG -n ${P}/.ConfigReceiver --ez guard false --ez keep_adb false`,
+  uninstall: cmd(
+    `adb -s 192.168.x.x:5555 shell am broadcast -a ${P}.CONFIG -n ${P}/.ConfigReceiver --ez guard false --ez keep_adb false`,
+    `adb -s 192.168.x.x:5555 shell am broadcast -a ${P}.CONFIG -n ${P}/.ConfigReceiver --ez guard false --ez keep_adb false`,
+  ),
 
-  restoreScreensaver: `${A} shell settings put secure screensaver_components <ORIGINAL_VALUE>`,
+  /* Restore the screensaver only when the snapshot showed one. An empty value
+     means "no screensaver was set": the record must be deleted, not restored. */
+  restoreScreensaver: cmd(
+    `# Only if the recorded value was not empty (replace with your recorded value):
+adb -s 192.168.x.x:5555 shell settings put secure screensaver_components <ORIGINAL_COMPONENT>
+# If it was empty, remove the record instead so Android keeps its own default:
+adb -s 192.168.x.x:5555 shell settings delete secure screensaver_components`,
+    `# Only if the recorded value was not empty (replace with your recorded value):
+adb -s 192.168.x.x:5555 shell settings put secure screensaver_components <ORIGINAL_COMPONENT>
+# If it was empty, remove the record instead so Android keeps its own default:
+adb -s 192.168.x.x:5555 shell settings delete secure screensaver_components`,
+  ),
 
-  uninstallPackage: `${A} uninstall ${P}`,
+  uninstallPackage: cmd(
+    `adb -s 192.168.x.x:5555 uninstall ${P}`,
+    `adb -s 192.168.x.x:5555 uninstall ${P}`,
+  ),
 
-  reenableVendor: `${A} shell pm enable <VENDOR_LAUNCHER_PACKAGE>`,
+  reenableVendor: cmd(
+    `adb -s 192.168.x.x:5555 shell pm enable <VENDOR_LAUNCHER_PACKAGE>`,
+    `adb -s 192.168.x.x:5555 shell pm enable <VENDOR_LAUNCHER_PACKAGE>`,
+  ),
 
-  /* Informed, reversible last resort — never on Xiaomi / Redmi, which boot to
-     a black screen without their launcher. */
-  disableVendor: `${A} shell pm disable-user --user 0 <VENDOR_LAUNCHER_PACKAGE>`,
+  /* Informed, reversible last resort — never on Xiaomi / Redmi. */
+  disableVendor: cmd(
+    `adb -s 192.168.x.x:5555 shell pm disable-user --user 0 <VENDOR_LAUNCHER_PACKAGE>`,
+    `adb -s 192.168.x.x:5555 shell pm disable-user --user 0 <VENDOR_LAUNCHER_PACKAGE>`,
+  ),
 } as const;
+
+/* Kept for callers that only care about the shell-agnostic text. */
+export const pick = (c: Cmd, shell: Shell) => c[shell];
+
+export const shellMeta: Record<Shell, { label: string; hint: string }> = {
+  posix: { label: "macOS / Linux", hint: "" },
+  powershell: { label: "Windows PowerShell", hint: "" },
+};

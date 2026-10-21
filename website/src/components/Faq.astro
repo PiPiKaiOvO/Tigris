@@ -25,7 +25,7 @@ const f = copy.faq;
             {item.a.map((p) => <p>{p}</p>)}
             {item.cmds?.map((block, i) => (
               <div class="code">
-                <pre><code id={`cmd-faq-${idx}-${i}`}>{block.text}</code></pre>
+                <pre><code id={`cmd-faq-${idx}-${i}`} data-cmd={typeof block.text === "object" ? JSON.stringify(block.text) : undefined}>{typeof block.text === "string" ? block.text : block.text.powershell}</code></pre>
                 <button class="copy" type="button" data-copy={`#cmd-faq-${idx}-${i}`}>
                   <svg aria-hidden="true"><use href="#i-copy"></use></svg><span class="label"></span>
                 </button>

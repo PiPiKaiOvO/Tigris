@@ -60,7 +60,20 @@ const dl = locale === "zh" ? "下载" : "Download";
       </table>
     </div>
 
-    <p class="windows-note reveal" set:html={s.windowsNote} />
+    <p class="windows-note reveal">{s.shellNote}</p>
+
+    {/* One switch for every snippet on the page; the choice is remembered. */}
+    <div class="shell-switch reveal" data-shell-switch aria-label={s.shellLabels.posix + " / " + s.shellLabels.powershell}>
+      {(["powershell", "posix"] as const).map((shell, i) => (
+        <button
+          type="button"
+          data-shell={shell}
+          aria-pressed={i === 0 ? "true" : "false"}
+          class:list={{ "is-on": i === 0 }}
+        >{s.shellLabels[shell]}</button>
+      ))}
+      <p class="shell-switch-note">{s.placeholderNote}</p>
+    </div>
 
     <div class="tabs reveal" data-tabs>
       <div class="tablist" role="tablist" aria-label={s.tabsLabel}>
@@ -87,14 +100,14 @@ const dl = locale === "zh" ? "下载" : "Download";
             </div>
           )}
           <ol class="steps">
-            {tab.steps.map((step: Step) => (
+            {tab.steps.map((step: Step, si) => (
               <li>
                 <h4>{step.title}</h4>
                 {step.body && <p>{step.body}</p>}
                 {step.cmd && (
                   <div class="code">
-                    <pre><code id={`cmd-${tab.id}-${tab.steps.indexOf(step)}`}>{step.cmd}</code></pre>
-                    <button class="copy" type="button" data-copy={`#cmd-${tab.id}-${tab.steps.indexOf(step)}`}>
+                    <pre><code id={`cmd-${tab.id}-${si}`} data-cmd={typeof step.cmd === "object" ? JSON.stringify(step.cmd) : undefined}>{typeof step.cmd === "string" ? step.cmd : step.cmd.powershell}</code></pre>
+                    <button class="copy" type="button" data-copy={`#cmd-${tab.id}-${si}`}>
                       <svg aria-hidden="true"><use href="#i-copy"></use></svg><span class="label"></span>
                     </button>
                   </div>

@@ -75,7 +75,9 @@ export interface Copy {
     lede: string;
     packages: { name: string; use: string; href: string }[];
     prereq: string;
-    windowsNote: string;
+    shellNote: string;
+    shellLabels: { posix: string; powershell: string };
+    placeholderNote: string;
     adbTable: { caption: string; head: string[]; rows: string[][] };
     tabsLabel: string;
     tabs: {

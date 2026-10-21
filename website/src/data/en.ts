@@ -1,5 +1,8 @@
 import { brand, cmds } from "./site";
+import type { Cmd } from "./site";
 import type { Copy } from "./lang";
+
+const C: typeof cmds = cmds;
 
 export const en = {
   skip: "Skip to content",
@@ -111,7 +114,7 @@ export const en = {
 
   install: {
     eyebrow: "INSTALL",
-    title: "From download to new home screen, step by step.",
+    title: "A better home screen, step by step.",
     lede: "You need a computer on the same Wi-Fi as the TV, the TV's IP address and ADB debugging enabled. Android 9+, no root.",
     packages: [
       {
@@ -127,8 +130,11 @@ export const en = {
     ],
     prereq:
       "Before you start: the TV is on the same network as the computer, ADB debugging is enabled, and the first connection shows “Allow USB debugging?” — tick “Always allow”. The computer needs Android SDK Platform-Tools.",
-    windowsNote:
-      "The commands below avoid shell variables, so they paste unchanged into the macOS / Linux terminal, Windows PowerShell or CMD. The one Windows exception: `curl` is an alias for `Invoke-WebRequest`, so download the APK with `curl.exe -L -o …`, and run the Python helper with `python` instead of `python3`.",
+    shellNote:
+      "Every snippet has two forms — pick your system above. Windows PowerShell uses curl.exe instead of the curl alias and python instead of python3; macOS / Linux use the system curl and python3. No snippet relies on a shell variable and the package name is always written as com.leslie.tvhome in full, so a partial copy still runs.",
+    shellLabels: { posix: "macOS / Linux", powershell: "Windows PowerShell" },
+    placeholderNote:
+      "192.168.x.x is a placeholder for your TV's IP address. In the BRAVIA step, PIN is the four-digit code shown on the TV; type it in place of the placeholder.",
     adbTable: {
       caption: "Enabling ADB debugging by brand",
       head: ["TV", "How to enable ADB"],
@@ -159,31 +165,29 @@ export const en = {
         intro:
           "The fully verified path, including brightness, TV volume and HDMI input status. Replace 192.168.x.x with the TV's IP.",
         steps: [
-          { title: "Connect", body: "Accept “Allow USB debugging?” on the TV and tick “Always allow”.", cmd: cmds.connect },
+          { title: "Connect", body: "Accept “Allow USB debugging?” on the TV and tick “Always allow”.", cmd: C.connect },
           {
             title: "Record the original home, screensaver and accessibility services",
             body: "You need them if you ever uninstall; save the output somewhere safe.",
-            cmd: cmds.snapshotBeforeInstall,
+            cmd: C.snapshotBeforeInstall,
           },
-          { title: "Download and install the standard build", cmd: cmds.installStandard, note: "Windows PowerShell: use `curl.exe -L -o Tigris.apk …`." },
+          { title: "Download and install the standard build", cmd: C.installStandard, note: "Windows PowerShell: use `curl.exe -L -o Tigris.apk …`." },
           {
             title: "Make it the home screen and grant permissions",
             body: "The three grants cover the guard and screensaver, reviving after the system kills the app, and opening the home screen from the background after boot.",
-            cmd: cmds.setHomeAndGrant,
+            cmd: C.setHomeAndGrant,
           },
           {
             title: "Optional: register BRAVIA IP control",
             body: "Needed for brightness, TV volume and HDMI input status. The TV shows a four-digit PIN after the first command; use it in the second.",
-            cmd: `BODY='{"method":"actRegister","id":1,"version":"1.0","params":[{"clientid":"tvhome:1","nickname":"TVHome","level":"private"},[{"value":"yes","function":"WOL"}]]}'
-curl -s http://192.168.x.x/sony/accessControl -d "$BODY"
-curl -s -u ":PIN" http://192.168.x.x/sony/accessControl -d "$BODY"`,
+            cmd: C.braviaRegister,
             note: "This step uses a shell variable, so it only works in the macOS / Linux terminal.",
           },
           {
             title: "Allow on-device debugging",
             body: "The first launch asks for on-device debugging, used for standby, power and deep memory cleanup. Tick “Always allow”, then open the Control Center and check the “本机调试未授权” line is gone.",
           },
-          { title: "Verify", cmd: cmds.verify, note: "You should see a compact clock, two round controls and the glass dock." },
+          { title: "Verify", cmd: C.verify, note: "You should see a compact clock, two round controls and the glass dock." },
         ],
       },
       {
@@ -194,23 +198,23 @@ curl -s -u ":PIN" http://192.168.x.x/sony/accessControl -d "$BODY"`,
         danger:
           "Some TCL / FFalcon firmware has no usable backlight interface, so the brightness slider hides, and the input row opens TCL's own source picker. That is a firmware limit, not a failed install.",
         steps: [
-          { title: "Connect", cmd: cmds.connect },
-          { title: "Record the original home, screensaver and accessibility services", cmd: cmds.snapshotBeforeInstall },
+          { title: "Connect", cmd: C.connect },
+          { title: "Record the original home, screensaver and accessibility services", cmd: C.snapshotBeforeInstall },
           {
             title: "Push the guard build with T-Cast",
             body: "The script serves the APK on local port 8765 and connects to the TV on 6553. When “多屏互动：正在发起应用推送” appears on the TV, choose <strong>同意</strong> (Agree) with the remote.",
-            cmd: cmds.tclPush,
+            cmd: C.tclPush,
             note: "Windows: use `curl.exe` and `python`, and allow inbound port 8765 if the firewall asks.",
           },
-          { title: "Confirm it installed", cmd: cmds.packagePath },
+          { title: "Confirm it installed", cmd: C.packagePath },
           {
             title: "Grant permissions and enable the home guard",
             body: "The guard build declares no home screen, so the home guard keeps it in front. TCL blocks third-party autostart by default, so both appops are required.",
-            cmd: cmds.tclGrants,
+            cmd: C.tclGrants,
           },
           {
             title: "Check the guard is running",
-            cmd: cmds.tclCheck,
+            cmd: C.tclCheck,
             note: "The output should list `com.leslie.tvhome/com.leslie.tvhome.HomeGuardService`, and the last line should be `com.leslie.tvhome/.HomeActivity`.",
           },
         ],
@@ -223,14 +227,14 @@ curl -s -u ":PIN" http://192.168.x.x/sony/accessControl -d "$BODY"`,
         danger:
           "<strong>Never disable the stock Xiaomi launcher</strong> (com.mitv.tvhome). The TV then boots to a black screen that only ADB can recover.",
         steps: [
-          { title: "Connect", cmd: cmds.connect },
-          { title: "Record the original home, screensaver and accessibility services", cmd: cmds.snapshotBeforeInstall },
-          { title: "Install the standard build", cmd: cmds.installStandard, note: "Windows PowerShell: use `curl.exe`." },
-          { title: "Make it the home screen and grant permissions", cmd: cmds.xiaomiSetup },
+          { title: "Connect", cmd: C.connect },
+          { title: "Record the original home, screensaver and accessibility services", cmd: C.snapshotBeforeInstall },
+          { title: "Install the standard build", cmd: C.installStandard, note: "Windows PowerShell: use `curl.exe`." },
+          { title: "Make it the home screen and grant permissions", cmd: C.xiaomiSetup },
           {
             title: "Enable the home guard and keep ADB on",
             body: "keep_adb true makes Tigris switch ADB back on after Xiaomi turns it off on wake; drop it if you do not want that.",
-            cmd: cmds.xiaomiGuard,
+            cmd: C.xiaomiGuard,
           },
           {
             title: "Check",
@@ -246,11 +250,11 @@ curl -s -u ":PIN" http://192.168.x.x/sony/accessControl -d "$BODY"`,
         steps: [
           {
             title: "Connect and check the Android version",
-            cmd: cmds.connect,
+            cmd: C.connect,
             note: "Then run `adb -s 192.168.x.x:5555 shell getprop ro.build.version.sdk`; it must be at least 28 (Android 9).",
           },
-          { title: "Record the original home, screensaver and accessibility services", cmd: cmds.snapshotBeforeInstall },
-          { title: "Install and set as home", cmd: cmds.stockInstall, note: "Windows PowerShell: use `curl.exe`." },
+          { title: "Record the original home, screensaver and accessibility services", cmd: C.snapshotBeforeInstall },
+          { title: "Install and set as home", cmd: C.stockInstall, note: "Windows PowerShell: use `curl.exe`." },
           {
             title: "Grant what only ADB can grant",
             cmd: `adb -s 192.168.x.x:5555 shell pm grant com.leslie.tvhome android.permission.WRITE_SECURE_SETTINGS
@@ -260,7 +264,7 @@ adb -s 192.168.x.x:5555 shell appops set com.leslie.tvhome SYSTEM_ALERT_WINDOW a
           {
             title: "If Home still returns to the stock launcher",
             body: "Enable the home guard first. Only if the TV demonstrably does not depend on the vendor launcher, and only with your consent, disable it as a last resort — and keep the undo command.",
-            cmd: cmds.disableVendor,
+            cmd: C.disableVendor,
             note: "Never do this on Xiaomi / Redmi.",
           },
         ],
@@ -334,8 +338,9 @@ adb -s 192.168.x.x:5555 shell appops set com.leslie.tvhome SYSTEM_ALERT_WINDOW a
       {
         q: "How do I restore the original launcher?",
         a: [
-          "Run the steps in order. The first command turns off the home guard, the second restores the screensaver you recorded before installing, and the third uninstalls Tigris. Replace the angle-bracket placeholders with your recorded values; if you never changed the screensaver, skip that command.",
-          "Do not disable or uninstall a vendor launcher on Xiaomi / Redmi (com.mitv.tvhome): those TVs boot to a black screen. If you disabled a vendor launcher on another brand earlier, re-enable it with the last command. After uninstalling, press Home once; if nothing happens, pick your launcher again in the TV's system settings.",
+          "Everything here runs on your computer, in the same PowerShell or terminal you used to install. Replace the angle-bracket placeholders with the values you recorded in the install step “Record the original home, screensaver and accessibility services”.",
+          "1. Turn the home guard off, so the accessibility service list returns to what it was. 2. Restore the screensaver: if the recorded value was not empty, put it back; if it was empty (no screensaver was set), delete the setting rather than typing a placeholder. 3. Uninstall Tigris. Afterwards press Home once; the stock launcher comes back, so if nothing happens, choose your launcher again in the TV system settings.",
+          "Never disable or uninstall a vendor launcher on Xiaomi / Redmi (com.mitv.tvhome): those TVs boot to a black screen. If you disabled a vendor launcher on another brand earlier, re-enable it with the last command and reboot the TV once.",
         ],
         cmds: [
           { text: cmds.uninstall },
@@ -406,7 +411,7 @@ adb -s 192.168.x.x:5555 shell appops set com.leslie.tvhome SYSTEM_ALERT_WINDOW a
 
   finalCta: {
     eyebrow: "GET TIGRIS",
-    title: "Make the TV worth turning on tonight.",
+    title: "Make every TV moment feel new.",
     body: "Download the APK, enable ADB, and follow the guide or hand it to an agent. Android 9+, no root, reversible.",
     primary: "Download free",
     secondary: "View source on GitHub",

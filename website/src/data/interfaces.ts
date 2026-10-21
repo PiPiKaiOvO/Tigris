@@ -1,12 +1,14 @@
+export type CommandVariant = string | { posix: string; powershell: string };
+
 export interface Step {
   title: string;
   body?: string;
-  cmd?: string;
+  cmd?: CommandVariant;
   note?: string;
 }
 
 export interface FaqItem {
   q: string;
   a: string[];
-  cmds?: { text: string }[];
+  cmds?: { text: CommandVariant }[];
 }

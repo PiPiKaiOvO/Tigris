@@ -65,7 +65,7 @@ const canonical = `${brand.site}${copy.meta.canonical.replace(brand.site, "")}`;
     document.documentElement.classList.remove("no-js");
   </script>
 </head>
-<body data-copied={t.copied} data-copy-failed={t.copyFailed} data-copy-label={t.copy} data-compare-value={locale}>
+<body data-copied={t.copied} data-copy-failed={t.copyFailed} data-copy-label={t.copy} data-compare-value={t.compareValue(0).replace("0", "{p}")}>
   <slot />
 </body>
 </html>

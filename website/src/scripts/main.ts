@@ -6,11 +6,29 @@
 
   const doc = document;
   const body = doc.body;
+  const lang = (doc.documentElement.lang || "zh").toLowerCase();
+  const isEnglish = lang.startsWith("en");
+
+  /* Every user-facing string is supplied per locale by the layout. The English
+     literals below are only a safety net if an attribute is missing. */
   const t = {
-    copied: body?.dataset.copied || "已复制",
-    copyFailed: body?.dataset.copyFailed || "复制失败",
-    copy: body?.dataset.copyLabel || "复制",
+    copy: body?.dataset.copyLabel || (isEnglish ? "Copy" : "复制"),
+    copied: body?.dataset.copied || (isEnglish ? "Copied" : "已复制"),
+    copyFailed: body?.dataset.copyFailed || (isEnglish ? "Copy failed" : "复制失败"),
+    compareTemplate:
+      body?.dataset.compareValue || (isEnglish ? "Showing {p}% of the before image" : "显示 {p}% 的安装前画面"),
   };
+
+  const shellStorageKey = "tigris-shell";
+  const initialShell = (() => {
+    try {
+      const stored = window.localStorage.getItem(shellStorageKey);
+      if (stored === "posix" || stored === "powershell") return stored;
+    } catch {
+      /* private mode or blocked storage: fall through */
+    }
+    return "powershell";
+  })();
 
   /* ---------- header ---------- */
   const header = doc.querySelector(".site-header");
@@ -47,7 +65,7 @@
   doc.querySelectorAll<HTMLElement>("[data-compare]").forEach((compare) => {
     const handle = compare.querySelector<HTMLElement>(".compare-handle");
     if (!handle) return;
-    const template = handle.dataset.valuetemplate || "{p}";
+    const template = handle.dataset.valuetemplate || t.compareTemplate;
     let pos = 50;
     let dragging = false;
 
@@ -173,6 +191,38 @@
     select(0);
   });
 
+  /* ---------- install shell switch (PowerShell / macOS · Linux) ---------- */
+  let currentShell: "posix" | "powershell" = initialShell;
+
+  const applyShell = (shell: "posix" | "powershell") => {
+    currentShell = shell;
+    doc.querySelectorAll<HTMLElement>("[data-cmd]").forEach((code) => {
+      try {
+        const parsed = JSON.parse(code.dataset.cmd || "{}") as Record<string, string>;
+        const text = parsed[shell];
+        if (text) code.textContent = text;
+      } catch {
+        /* leave the rendered text alone */
+      }
+    });
+    doc.querySelectorAll<HTMLButtonElement>("[data-shell]").forEach((btn) => {
+      const on = btn.dataset.shell === shell;
+      btn.setAttribute("aria-pressed", String(on));
+      btn.classList.toggle("is-on", on);
+    });
+    try {
+      window.localStorage.setItem(shellStorageKey, shell);
+    } catch {
+      /* ignore storage failures */
+    }
+  };
+
+  doc.querySelectorAll<HTMLButtonElement>("[data-shell]").forEach((btn) => {
+    btn.addEventListener("click", () => applyShell(btn.dataset.shell === "posix" ? "posix" : "powershell"));
+  });
+
+  if (doc.querySelector("[data-cmd]")) applyShell(currentShell);
+
   /* ---------- copy buttons: label span, icon untouched ---------- */
   const fallbackCopy = (text: string) => {
     const area = doc.createElement("textarea");
@@ -197,15 +247,25 @@
     if (label && !label.textContent) label.textContent = t.copy;
 
     /* Resolve the text from the referenced element, then from a sibling <pre>
-       so a mistyped selector degrades instead of silently doing nothing. */
+       so a mistyped selector degrades instead of silently doing nothing.
+       Command blocks carry both shell variants in data-cmd, so copying always
+       matches the shell the reader selected (not just what is displayed). */
     const resolveText = () => {
       const sel = btn.dataset.copy || "";
       let node: HTMLElement | null = sel ? doc.querySelector<HTMLElement>(sel) : null;
-      if (!node) {
-        const code = btn.parentElement?.querySelector<HTMLElement>("pre code");
-        node = code ?? null;
+      if (!node) node = btn.parentElement?.querySelector<HTMLElement>("pre code") ?? null;
+      if (!node) return "";
+      const variants = node.dataset.cmd;
+      if (variants) {
+        try {
+          const parsed = JSON.parse(variants) as Record<string, string>;
+          const text = parsed[currentShell];
+          if (text) return text.trim();
+        } catch {
+          /* fall back to whatever is rendered */
+        }
       }
-      return node?.textContent?.trim() ?? "";
+      return node.textContent?.trim() ?? "";
     };
 
     let reset: number | undefined;
