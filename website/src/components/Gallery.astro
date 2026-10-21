@@ -1,0 +1,75 @@
+---
+import { shots } from "../data/site";
+import type { Copy, Locale } from "../data/lang";
+import { uiStrings } from "../data/strings";
+
+interface Props {
+  copy: Copy;
+  locale: Locale;
+}
+
+const { copy, locale } = Astro.props;
+const t = uiStrings[locale];
+const g = copy.gallery;
+
+const items = [
+  { img: shots.home, label: locale === "zh" ? "主屏幕" : "Home", file: "home.jpg", alt: locale === "zh" ? "Tigris 主屏幕实拍。" : "Tigris home screen capture." },
+  { img: shots.shelf, label: locale === "zh" ? "顶部内容" : "Top Shelf", file: "shelf.jpg", alt: locale === "zh" ? "Top Shelf 顶部内容实拍。" : "Top Shelf capture." },
+  { img: shots.grid, label: locale === "zh" ? "全部 App" : "All apps", file: "grid.jpg", alt: locale === "zh" ? "全部 App 网格实拍。" : "All apps grid capture." },
+  { img: shots.cc, label: locale === "zh" ? "控制中心" : "Control Center", file: "cc.jpg", alt: locale === "zh" ? "控制中心实拍。" : "Control Center capture." },
+  { img: shots.frame, label: locale === "zh" ? "相框屏保" : "Photo frame", file: "frame.jpg", alt: locale === "zh" ? "相框屏保实拍。" : "Photo frame capture." },
+];
+---
+<section class="section gallery-section" id="gallery">
+  <div class="wrap">
+    <div class="section-head center reveal">
+      <p class="eyebrow">{g.eyebrow}</p>
+      <h2>{g.title}</h2>
+      <p class="lede">{g.lede}</p>
+    </div>
+
+    <div class="gallery reveal">
+      {items.map((item, i) => (
+        <figure class={`g-${item.file.replace(".jpg", "")}`}>
+          <button
+            type="button"
+            data-lightbox-open
+            data-full={item.img.src}
+            data-caption={item.label}
+            data-alt={item.alt}
+            aria-label={item.label}
+          >
+            <img
+              src={item.img.small}
+              srcset={`${item.img.small} 640w, ${item.img.src} 1280w`}
+              sizes={i < 2 ? "(max-width: 860px) 92vw, 48vw" : "(max-width: 860px) 46vw, 32vw"}
+              width="1280"
+              height="720"
+              loading="lazy"
+              decoding="async"
+              alt={item.alt}
+            />
+          </button>
+          <figcaption>{item.label} <em>{item.file}</em></figcaption>
+        </figure>
+      ))}
+    </div>
+  </div>
+</section>
+
+<dialog class="lightbox" data-lightbox aria-label={t.viewer}>
+  <div class="lightbox-inner">
+    <button class="lightbox-close" type="button" data-close aria-label={t.close}>
+      <svg aria-hidden="true"><use href="#i-close"></use></svg>
+    </button>
+    <img alt="" hidden />
+    <div class="lightbox-bar">
+      <span data-lightbox-caption></span>
+      <span data-lightbox-counter>1 / {items.length}</span>
+      <span class="nav-btns">
+        <button type="button" data-prev aria-label={t.prev}><svg aria-hidden="true" style="transform:rotate(180deg)"><use href="#i-chevron"></use></svg></button>
+        <button type="button" data-next aria-label={t.next}><svg aria-hidden="true"><use href="#i-chevron"></use></svg></button>
+      </span>
+    </div>
+  </div>
+</dialog>
