@@ -65,7 +65,9 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
             intArrayOf(Color.argb(230, 255, 255, 255), Color.TRANSPARENT),
             null, android.graphics.Shader.TileMode.CLAMP)
         // Added rather than layered on: the glass glows brighter in its own colours instead of turning milky.
-        private val lightPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { blendMode = android.graphics.BlendMode.PLUS }
+        private val lightPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.ADD)
+        }
         init { visibility = View.INVISIBLE; translationZ = ctx.dp(100.5f).toFloat() }
         override fun onDraw(canvas: Canvas) {
             mask.reset()
@@ -748,6 +750,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
                     ?: when {
                         list.isEmpty() -> "无法读取电视的输入源"
                         list.first().uri.startsWith("tcl-input://") -> "TCL 信号源选择器"
+                        list.first().uri.startsWith("coocaa-input://") -> "酷开信号源选择器"
                         list.first().uri.startsWith("extInput:") -> "当前：主屏幕"
                         else -> "${list.size} 个 HDMI 输入"  // Android can't tell which one is showing
                     }

@@ -1,5 +1,8 @@
 # Tigris
 
+> **本仓库是 [lesnolie/Tigris](https://github.com/lesnolie/Tigris) 的 fork**：回移到 Android 8.0
+> （API 26）并适配酷开/创维电视。改了什么、怎么装见 [COOCAA.md](COOCAA.md)。
+
 把 Android TV 的桌面换成 tvOS 26 的样子：沉底的 Liquid Glass Dock、Top Shelf 式的顶部内容、毛玻璃控制中心、风景照片背景和相框屏保。
 
 > 十二生肖开源系列第三个项目：虎。Tigris 是拉丁语和希腊语里的"老虎"。

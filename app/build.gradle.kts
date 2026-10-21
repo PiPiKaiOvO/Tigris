@@ -1,14 +1,15 @@
 plugins {
     id("com.android.application")
+    id("org.jetbrains.kotlin.android")
 }
 
 android {
     namespace = "com.leslie.tvhome"
-    compileSdk = 36
+    compileSdk = 34
 
     defaultConfig {
         applicationId = "com.leslie.tvhome"
-        minSdk = 28
+        minSdk = 26
         targetSdk = 31
         versionCode = 5
         versionName = "1.9"
@@ -41,14 +42,18 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
 }
 
 dependencies {
-    implementation("androidx.recyclerview:recyclerview:1.4.0")
+    implementation("androidx.recyclerview:recyclerview:1.3.2")
     implementation("androidx.palette:palette:1.0.0")
     implementation("dev.mobile:dadb:2.0.0")
     // Apple TV aerial screensaver.
-    implementation("androidx.media3:media3-exoplayer:1.5.1")
+    implementation("androidx.media3:media3-exoplayer:1.4.1")
     // The page a phone opens from the QR code (wallpapers, uploads).
     implementation("org.nanohttpd:nanohttpd:2.3.1")
     implementation("com.google.zxing:core:3.5.3")
