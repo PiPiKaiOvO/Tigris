@@ -25,6 +25,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.text.format.DateFormat
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -523,7 +524,8 @@ class HomeActivity : Activity(), TileAdapter.Listener {
 
     private fun updateClock() {
         val now = Date()
-        clockText.text = SimpleDateFormat("h:mm a", Locale.US).format(now)
+        val pattern = if (DateFormat.is24HourFormat(this)) "HH:mm" else "h:mm a"
+        clockText.text = SimpleDateFormat(pattern, Locale.US).format(now)
     }
 
     /** Only the home scene, excluding every control-center view and dialog. */
