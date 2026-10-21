@@ -50,6 +50,17 @@ import java.util.concurrent.Executors
 class HomeActivity : Activity(), TileAdapter.Listener {
     companion object {
         const val SHELF_SECONDS = 8
+        private const val EXTRA_GUARD = "com.leslie.tvhome.GUARD"
+
+        /**
+         * How the home guard and the boot receiver bring the home screen back: the same task, with
+         * no HOME category. Where Tigris is not the system home, that category made Android open a
+         * second, home-type task with a fresh screen every time (Aerial, Xiaomi MiTV-MFTR0).
+         */
+        fun bringBack(ctx: Context): Intent = Intent(ctx, HomeActivity::class.java)
+            .setAction(Intent.ACTION_MAIN)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+            .putExtra(EXTRA_GUARD, true)
     }
 
     private lateinit var root: FrameLayout
@@ -64,6 +75,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     private lateinit var repo: AppRepo
     private lateinit var prefs: Prefs
     private lateinit var control: ControlCenter
+    private val tv by lazy { TvControls(this) }
 
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
@@ -140,6 +152,30 @@ class HomeActivity : Activity(), TileAdapter.Listener {
             repo.invalidate(pkg)
             reload(pkg)
         }
+    }
+
+    /**
+     * Xiaomi shows its own screensaver (with ads) after system/screen_saver_timeout instead of
+     * Android's, so the photo frame starts 15 s ahead of it when the home screen sits idle, and
+     * keeps the screen on so Xiaomi's does not follow. Elsewhere Android's screensaver applies.
+     */
+    private val idleFrame = Runnable {
+        if (hasWindowFocus() && sheets.isEmpty() && !control.isOpen) openFrame()
+    }
+
+    private fun firmwareSaverDelay(): Long? {
+        val t = runCatching { Settings.System.getLong(contentResolver, "screen_saver_timeout") }.getOrNull() ?: return null
+        return if (t > 0) maxOf(30_000L, t - 15_000L) else null
+    }
+
+    private fun restartIdle() {
+        main.removeCallbacks(idleFrame)
+        firmwareSaverDelay()?.let { main.postDelayed(idleFrame, it) }
+    }
+
+    fun openFrame() {
+        startActivity(Intent(this, FrameActivity::class.java))
+        overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
     }
 
     private val ticker = object : Runnable {
@@ -228,7 +264,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
             setPadding(dp(8), dp(8), dp(8), dp(8))
         }
         netButton = IconButton(this, R.drawable.ic_wifi) {
-            startActivity(Intent(Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            runCatching { startActivity(tv.wifiIntent().addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
         }
         ccButton = IconButton(this, R.drawable.ic_toggles) { control.open() }
         icons.addView(netButton, LinearLayout.LayoutParams(dp(36), dp(36)).apply { marginEnd = dp(8) })
@@ -481,6 +517,16 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         netButton.alpha = if (caps == null) 0.4f else 1f
     }
 
+    /** Pins a TV input to the grid, or takes it off. */
+    fun pinInput(i: Bravia.Input, on: Boolean) {
+        val enc = InputTile.encode(i)
+        prefs.pinnedInputs = prefs.pinnedInputs.filter { InputTile.decode(it)?.uri != i.uri }.toSet() + if (on) setOf(enc) else emptySet()
+        if (on) prefs.hidden = prefs.hidden - InputTile.key(i)
+        reload()
+    }
+
+    fun isPinned(i: Bravia.Input) = prefs.pinnedInputs.any { InputTile.decode(it)?.uri == i.uri }
+
     private fun reload(changed: String? = null) {
         io.execute {
             val list = repo.orderedVisible()
@@ -537,6 +583,9 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     override fun onTileClicked(pos: Int, cell: TileCell) {
         if (moving >= 0) { endMove(); return }
         val app = adapter.apps.getOrNull(pos) ?: return
+        app.input?.let { i -> io.execute { tv.setInput(i) }; return }
+        // The stock launcher (Xiaomi's PatchWall) can only be opened through the system Home action.
+        if (HomeGuardService.isStockHome(app.pkg) && HomeGuardService.openStockLauncher()) return
         val intent = repo.launchIntent(app) ?: return
         val opts = ActivityOptions.makeScaleUpAnimation(cell.card, 0, 0, cell.card.width, cell.card.height)
         try {
@@ -549,6 +598,13 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     override fun onTileLongPressed(pos: Int, cell: TileCell) {
         if (moving >= 0) return
         val app = adapter.apps.getOrNull(pos) ?: return
+        app.input?.let { i ->
+            showSheet(Sheet(root).title(app.label).message(null)
+                .button("编辑主屏幕") { startMove(pos) }
+                .button("从主屏幕移除") { pinInput(i, false) }
+                .button("取消") {}, restoreFocusTo = pos)
+            return
+        }
         val s = Sheet(root).title(app.label).message(null)
             .button("编辑主屏幕") { startMove(pos) }
             .button("隐藏") {
@@ -692,6 +748,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        restartIdle()
         val code = event.keyCode
         if (event.action == KeyEvent.ACTION_UP && (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_MENU)) {
             when {
@@ -713,14 +770,25 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         sheets.toList().forEach { it.dismiss() }
         control.close()
         if (moving >= 0) endMove()
+        // The guard brought the screen back (an app exited to the stock launcher): stay where we were.
+        if (intent.getBooleanExtra(EXTRA_GUARD, false)) return
         focusedPos = 0
         // Scroll by our own offset: smoothScrollToPosition aligns to the padding and leaves the grid off its resting place.
         grid.smoothScrollBy(0, -scrollY, Motion.ease, 360)
         grid.postDelayed({ focusAt(0) }, 400)
     }
 
+    override fun onStart() {
+        super.onStart()
+        Guard.ensure(this)
+        main.postDelayed({ Guard.rebindIfStalled(this) }, 5_000)
+    }
+
     override fun onResume() {
         super.onResume()
+        prefs.homeInFront = true
+        HomeGuardService.onHomeResumed()
+        restartIdle()
         applyBackground()
         updateNetworkIcon()
         main.removeCallbacks(ticker)
@@ -730,6 +798,8 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     }
 
     override fun onPause() {
+        prefs.homeInFront = false
+        main.removeCallbacks(idleFrame)
         main.removeCallbacks(ticker)
         main.removeCallbacks(shelfAdvance)
         super.onPause()

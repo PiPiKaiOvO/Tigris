@@ -8,10 +8,12 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.database.ContentObserver
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.provider.Settings
 import java.util.concurrent.Executors
 
 /**
@@ -33,6 +35,11 @@ class KeeperService : Service() {
         }
     }
 
+    /** Xiaomi switches ADB debugging off on wake; with [Prefs.keepAdb] it goes straight back on. */
+    private val adbObserver = object : ContentObserver(main) {
+        override fun onChange(selfChange: Boolean) = Guard.ensureAdb(this@KeeperService)
+    }
+
     private val periodic = object : Runnable {
         override fun run() {
             runClean(spareForeground = true)
@@ -51,6 +58,8 @@ class KeeperService : Service() {
             .setContentText("待机时自动释放内存")
             .build())
         registerReceiver(screenOff, IntentFilter(Intent.ACTION_SCREEN_OFF))
+        contentResolver.registerContentObserver(Settings.Global.getUriFor(Settings.Global.ADB_ENABLED), false, adbObserver)
+        Guard.ensure(this)
         schedule()
     }
 
@@ -80,6 +89,7 @@ class KeeperService : Service() {
 
     override fun onDestroy() {
         unregisterReceiver(screenOff)
+        contentResolver.unregisterContentObserver(adbObserver)
         main.removeCallbacks(periodic)
         worker.shutdown()
         super.onDestroy()
@@ -98,5 +108,14 @@ class KeeperService : Service() {
 }
 
 class BootReceiver : BroadcastReceiver() {
-    override fun onReceive(c: Context, i: Intent) = KeeperService.start(c)
+    override fun onReceive(c: Context, i: Intent) {
+        KeeperService.start(c)
+        Guard.ensure(c)
+        // After a real boot on a firmware that still hands Home to its own launcher: open the home
+        // screen, unless the guard is already running and will look at what is in front itself (an
+        // HDMI-CEC source may have switched the TV to its input by now). Starting an activity from
+        // here needs SYSTEM_ALERT_WINDOW, granted with the guard.
+        if (i.action != Intent.ACTION_BOOT_COMPLETED || !Prefs(c).guard || HomeGuardService.isRunning || Guard.isDefaultHome(c)) return
+        runCatching { c.startActivity(HomeActivity.bringBack(c)) }
+    }
 }

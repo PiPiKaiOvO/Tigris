@@ -154,25 +154,33 @@ class PhotoFrameView(ctx: Context) : FrameLayout(ctx) {
     }
 }
 
-/** Opened from the Control Center: the photo frame until any key is pressed. */
+/**
+ * Opened from the Control Center, or by the home screen ahead of Xiaomi's own screensaver: the
+ * screensaver chosen in settings until any key but left / right is pressed. The screen is kept on
+ * for four hours, after which the TV's own standby rules apply again.
+ */
 class FrameActivity : Activity() {
-    private lateinit var frame: PhotoFrameView
+    private lateinit var frame: SaverHost
+    private val main = Handler(Looper.getMainLooper())
+    private val releaseScreen = Runnable { window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        frame = PhotoFrameView(this)
+        main.postDelayed(releaseScreen, 4 * 3_600_000L)
+        frame = SaverHost(this)
         setContentView(frame)
     }
 
     override fun onResume() { super.onResume(); frame.start() }
     override fun onPause() { frame.stop(); super.onPause() }
+    override fun onDestroy() { main.removeCallbacks(releaseScreen); super.onDestroy() }
 
     override fun dispatchKeyEvent(e: KeyEvent): Boolean = when (e.keyCode) {
         KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_MUTE,
         KeyEvent.KEYCODE_POWER, KeyEvent.KEYCODE_HOME -> super.dispatchKeyEvent(e)
         else -> {
-            if (e.action == KeyEvent.ACTION_UP) finish()
+            if (!frame.onKey(e) && e.action == KeyEvent.ACTION_UP) finish()
             true
         }
     }
@@ -183,15 +191,25 @@ class FrameActivity : Activity() {
     }
 }
 
-/** The same photo frame as the system screensaver, shown after the TV has been idle. */
+/** The same screensaver as the system one, shown after the TV has been idle. */
 class PhotoDream : DreamService() {
-    private var frame: PhotoFrameView? = null
+    private var frame: SaverHost? = null
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        isInteractive = false
+        // Interactive so that left / right can skip a film; every other key ends the dream.
+        isInteractive = true
         isFullscreen = true
-        frame = PhotoFrameView(this).also { setContentView(it) }
+        frame = SaverHost(this).also { setContentView(it) }
+    }
+
+    override fun dispatchKeyEvent(e: KeyEvent): Boolean {
+        if (frame?.onKey(e) == true) return true
+        when (e.keyCode) {
+            KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_MUTE -> return super.dispatchKeyEvent(e)
+        }
+        if (e.action == KeyEvent.ACTION_UP) finish()
+        return true
     }
 
     override fun onDreamingStarted() { super.onDreamingStarted(); frame?.start() }

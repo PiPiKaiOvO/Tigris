@@ -66,7 +66,45 @@ class Prefs(ctx: Context) {
         get() = sp.getString("last_clean", "")!!
         set(v) = sp.edit().putString("last_clean", v).apply()
 
+    /** The screensaver before the photo frame took over, put back when it is turned off. */
+    var prevScreensaver: String
+        get() = sp.getString("prev_screensaver", "")!!
+        set(v) = sp.edit().putString("prev_screensaver", v).apply()
+
+    /** What the photo frame / screensaver shows: [SAVER_PHOTOS] or [SAVER_AERIAL]. */
+    var saverMode: String
+        get() = sp.getString("saver_mode", SAVER_PHOTOS)!!
+        set(v) = sp.edit().putString("saver_mode", v).apply()
+
+    /** Keep the home screen in front on firmwares that pin Home to their own launcher (Guard.kt). */
+    var guard: Boolean
+        get() = sp.getBoolean("guard", false)
+        set(v) = sp.edit().putBoolean("guard", v).apply()
+
+    /** Switch ADB debugging back on whenever the firmware turns it off (Xiaomi does on wake). */
+    var keepAdb: Boolean
+        get() = sp.getBoolean("keep_adb", false)
+        set(v) = sp.edit().putBoolean("keep_adb", v).apply()
+
+    /** Kept on disk while the home screen is in front, so a new process can tell how the last one ended. */
+    var homeInFront: Boolean
+        get() = sp.getBoolean("home_in_front", false)
+        set(v) = sp.edit().putBoolean("home_in_front", v).apply()
+
+    /** Picture links for the "custom" background, one per line (an image, or an API that returns one). */
+    var customWallUrls: String
+        get() = sp.getString("custom_urls", "")!!
+        set(v) = sp.edit().putString("custom_urls", v).apply()
+
+    /** TV inputs pinned to the home grid, as [InputTile.key] strings. */
+    var pinnedInputs: Set<String>
+        get() = sp.getStringSet("pinned_inputs", emptySet())!!.toSet()
+        set(v) = sp.edit().putStringSet("pinned_inputs", v).apply()
+
     companion object {
+        const val SAVER_PHOTOS = "photos"
+        const val SAVER_AERIAL = "aerial"
+
         val DEFAULT_KEEP = setOf(
             "com.dangbei.screencast",
             "com.xiaodianshi.tv.yst",

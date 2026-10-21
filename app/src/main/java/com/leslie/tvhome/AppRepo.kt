@@ -22,7 +22,26 @@ data class AppEntry(
     val label: String,
     val component: ComponentName,
     val leanback: Boolean,
+    /** Set for a TV input pinned to the grid; then [pkg] is its [InputTile.key]. */
+    val input: Bravia.Input? = null,
 )
+
+/** A TV input (HDMI) pinned to the home grid from the Control Center's input list. */
+object InputTile {
+    private const val PREFIX = "input:"
+    private const val SEP = "\u001f"
+
+    fun key(i: Bravia.Input) = PREFIX + i.uri
+    fun isInput(pkg: String) = pkg.startsWith(PREFIX)
+
+    /** How it is kept in [Prefs.pinnedInputs]. */
+    fun encode(i: Bravia.Input) = listOf(i.uri, i.title, i.label).joinToString(SEP)
+
+    fun decode(s: String): Bravia.Input? {
+        val p = s.split(SEP)
+        return if (p.size == 3) Bravia.Input(p[0], p[1], p[2], false) else null
+    }
+}
 
 /** Enumerates launchable apps and renders their 5:3 tvOS-style tiles. */
 class AppRepo(private val ctx: Context) {
@@ -37,7 +56,7 @@ class AppRepo(private val ctx: Context) {
         fun add(list: List<ResolveInfo>, leanback: Boolean) {
             for (ri in list) {
                 val ai = ri.activityInfo ?: continue
-                if (ai.packageName == ctx.packageName && !leanback) continue
+                if (ai.packageName == ctx.packageName && (!leanback || ai.name == HomeActivity::class.java.name)) continue
                 if (byPkg[ai.packageName]?.leanback == true) continue
                 byPkg[ai.packageName] = AppEntry(
                     ai.packageName,
@@ -49,8 +68,23 @@ class AppRepo(private val ctx: Context) {
         }
         add(pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER), 0), true)
         add(pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0), false)
-        // Other launchers only confuse things on a launcher grid.
+        // Firmware apps the maker's launcher shows although they declare no launcher category
+        // (Xiaomi's 应用中心 by category, 高清播放器 and 米家 by name; from Aerial's device notes).
+        add(pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(CATEGORY_APPSTORE_LAUNCHER), 0), false)
+        for (c in UNLISTED_ENTRIES) {
+            if (c.packageName in byPkg) continue
+            val ai = runCatching { pm.getActivityInfo(c, 0) }.getOrNull() ?: continue
+            if (ai.exported && ai.isEnabled && ai.applicationInfo.enabled)
+                byPkg[c.packageName] = AppEntry(c.packageName, ai.loadLabel(pm).toString().trim(), c, false)
+        }
+        // Other launchers only confuse things on a launcher grid; so does the home screen itself
+        // (the guard build lists it as an app).
         HIDE_ALWAYS.forEach { byPkg.remove(it) }
+        if (byPkg[ctx.packageName]?.component?.className == HomeActivity::class.java.name) byPkg.remove(ctx.packageName)
+        for (s in prefs.pinnedInputs) {
+            val i = InputTile.decode(s) ?: continue
+            byPkg[InputTile.key(i)] = AppEntry(InputTile.key(i), i.name, ComponentName(ctx, HomeActivity::class.java), false, i)
+        }
         return byPkg.values.toList()
     }
 
@@ -68,7 +102,7 @@ class AppRepo(private val ctx: Context) {
                 .thenComparator { a, b -> collator.compare(a.label, b.label) })
     }
 
-    fun isSystem(pkg: String): Boolean = try {
+    fun isSystem(pkg: String): Boolean = if (InputTile.isInput(pkg)) false else try {
         (pm.getApplicationInfo(pkg, 0).flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
     } catch (e: PackageManager.NameNotFoundException) { false }
 
@@ -101,6 +135,7 @@ class AppRepo(private val ctx: Context) {
         tiles.get(app.pkg)?.let { return it }
         val bmp = Bitmap.createBitmap(TILE_W, TILE_H, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
+        app.input?.let { drawInputTile(c, it); tiles.put(app.pkg, bmp); return bmp }
         val banner = try {
             pm.getActivityInfo(app.component, 0).loadBanner(pm)
                 ?: pm.getApplicationInfo(app.pkg, 0).loadBanner(pm)
@@ -159,7 +194,37 @@ class AppRepo(private val ctx: Context) {
         crop.recycle(); blurred.recycle(); src.recycle()
     }
 
+    /** An input tile: a dark glass card with the input glyph and its name, like tvOS's own inputs. */
+    private fun drawInputTile(c: Canvas, i: Bravia.Input) {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        p.shader = android.graphics.LinearGradient(0f, 0f, TILE_W.toFloat(), TILE_H.toFloat(),
+            Color.rgb(58, 64, 82), Color.rgb(22, 24, 32), android.graphics.Shader.TileMode.CLAMP)
+        c.drawRect(0f, 0f, TILE_W.toFloat(), TILE_H.toFloat(), p)
+        p.shader = null
+        val glyph = ctx.getDrawable(R.drawable.ic_input)!!.mutate()
+        glyph.setTint(Color.WHITE)
+        val g = 64
+        glyph.setBounds((TILE_W - g) / 2, 46, (TILE_W + g) / 2, 46 + g)
+        glyph.draw(c)
+        p.color = Color.WHITE
+        p.textAlign = Paint.Align.CENTER
+        p.typeface = Fonts.inter(ctx, 600)
+        p.textSize = 30f
+        c.drawText(i.title, TILE_W / 2f, 160f, p)
+        if (i.label.isNotEmpty()) {
+            p.color = Color.argb(170, 255, 255, 255)
+            p.typeface = Fonts.inter(ctx, 500)
+            p.textSize = 20f
+            c.drawText(i.label, TILE_W / 2f, 192f, p)
+        }
+    }
+
     companion object {
+        private const val CATEGORY_APPSTORE_LAUNCHER = "android.intent.category.APPSTORE_LAUNCHER"
+        private val UNLISTED_ENTRIES = listOf(
+            ComponentName("com.xiaomi.mitv.mediaexplorer", "com.xiaomi.mitv.mediaexplorer.NewScraperMainEntryActivity"), // 高清播放器
+            ComponentName("com.xiaomi.smarthome.tv", "com.xiaomi.smarthome.tv.ui.MainActivity"), // 米家
+        )
         const val TILE_W = 400
         const val TILE_H = 225
         val HIDE_ALWAYS = setOf(

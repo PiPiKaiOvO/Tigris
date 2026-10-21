@@ -109,14 +109,14 @@ class SettingsActivity : Activity() {
         row("隐藏的 App", { "${prefs.hidden.size} 个" }) { show(Page.HIDDEN) }
         row("已删除的预装 App", { "${prefs.removed.size} 个" }) { show(Page.REMOVED) }
         row("背景", {
-            when (prefs.background) {
-                Wallpapers.ANIME -> "二次元壁纸（自动更换）"
-                else -> Backgrounds.THEMES[prefs.background]?.first ?: "风景照片（自动更换）"
+            Backgrounds.THEMES[prefs.background]?.first ?: Wallpapers.label(Wallpapers.sourceFor(prefs.background)).let {
+                if (prefs.background == Wallpapers.MINE) it else "$it（自动更换）"
             }
         }) {
-            val keys = listOf(Wallpapers.BING, Wallpapers.ANIME) + Backgrounds.THEMES.keys.toList()
+            val keys = Wallpapers.SOURCES + Backgrounds.THEMES.keys.toList()
             prefs.background = keys[(keys.indexOf(prefs.background) + 1) % keys.size]
         }
+        row("用手机设置壁纸", { "上传照片、填图片链接" }) { startActivity(Intent(this, PhoneActivity::class.java)) }
         row("照片更换频率", { minutesLabel(prefs.wallMinutes) }) {
             val opts = listOf(15, 30, 60, 180, 1440)
             prefs.wallMinutes = opts[(opts.indexOf(prefs.wallMinutes) + 1) % opts.size]
@@ -131,14 +131,20 @@ class SettingsActivity : Activity() {
         }
         row("电视空闲时显示相框", { onOff(prefs.frameScreensaver) }) { v ->
             val on = !prefs.frameScreensaver
-            val comp = if (on) "$packageName/.PhotoDream" else SONY_DREAM
+            val current = Settings.Secure.getString(contentResolver, "screensaver_components").orEmpty()
+            val mine = "$packageName/${PhotoDream::class.java.name}"
+            // Whatever the TV had before goes back when the frame is turned off (Sony's own if unknown).
+            if (on && !current.startsWith(packageName)) prefs.prevScreensaver = current
+            val comp = if (on) mine else prefs.prevScreensaver.ifEmpty { SONY_DREAM }
             v.text = "正在设置…"
             Thread {
-                val ok = LocalAdb.shell(applicationContext,
-                    "settings put secure screensaver_components $comp; settings put secure screensaver_enabled 1") != null
+                val ok = putSecure("screensaver_components", comp) && putSecure("screensaver_enabled", "1")
                 if (ok) prefs.frameScreensaver = on
                 runOnUiThread { v.text = if (ok) onOff(prefs.frameScreensaver) else "需要先授权本机调试" }
             }.start()
+        }
+        row("屏保内容", { if (prefs.saverMode == Prefs.SAVER_AERIAL) "Apple TV 航拍视频" else "照片" }) {
+            prefs.saverMode = if (prefs.saverMode == Prefs.SAVER_AERIAL) Prefs.SAVER_PHOTOS else Prefs.SAVER_AERIAL
         }
         row("空闲多久显示相框", { minutesLabel(idleMinutes()) }) { v ->
             val opts = listOf(5, 10, 15, 30)
@@ -160,7 +166,27 @@ class SettingsActivity : Activity() {
                 runOnUiThread { v.text = if (ok) "已授权" else "未授权，按确认键重试" }
             }.start()
         }
-        row("系统设置", { "" }) { startActivity(TvControls(this).settingsIntent()) }
+        row("桌面守护（小米、TCL 等）", { if (!prefs.guard) "关" else if (HomeGuardService.isRunning) "开" else "开（未运行）" }) { v ->
+            val on = !prefs.guard
+            v.text = "正在设置…"
+            Thread {
+                val ok = (Guard.hasSecureSettings(this) || Guard.grantViaLocalAdb(applicationContext)) && Guard.setEnabled(applicationContext, on)
+                runOnUiThread {
+                    v.text = if (!ok) "需要先授权本机调试" else if (on) "开" else "关"
+                    if (ok && on) Toast.makeText(this, "按主页键回到原厂桌面时会自动回到这里", Toast.LENGTH_LONG).show()
+                }
+            }.start()
+        }
+        row("保持 ADB 调试开启", { onOff(prefs.keepAdb) }) { v ->
+            val on = !prefs.keepAdb
+            v.text = "正在设置…"
+            Thread {
+                val ok = !on || Guard.hasSecureSettings(this) || Guard.grantViaLocalAdb(applicationContext)
+                if (ok) { prefs.keepAdb = on; Guard.ensureAdb(applicationContext) }
+                runOnUiThread { v.text = if (ok) onOff(prefs.keepAdb) else "需要先授权本机调试" }
+            }.start()
+        }
+        row("系统设置", { "" }) { runCatching { startActivity(TvControls(this).settingsIntent()) } }
         row("关于", { "主屏幕 " + packageManager.getPackageInfo(packageName, 0).versionName }) {}
     }
 
@@ -228,6 +254,11 @@ class SettingsActivity : Activity() {
     }
 
     private fun onOff(b: Boolean) = if (b) "开" else "关"
+
+    /** A secure setting, written directly once WRITE_SECURE_SETTINGS is granted, otherwise through local adb. Blocking. */
+    private fun putSecure(key: String, value: String): Boolean =
+        if (Guard.hasSecureSettings(this)) runCatching { Settings.Secure.putString(contentResolver, key, value) }.getOrDefault(false)
+        else LocalAdb.shell(applicationContext, "settings put secure $key $value") != null
 
     private fun minutesLabel(m: Int) = when {
         m >= 1440 -> "每天"

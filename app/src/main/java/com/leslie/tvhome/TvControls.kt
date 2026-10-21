@@ -7,6 +7,8 @@ import android.media.AudioManager
 import android.media.tv.TvContract
 import android.media.tv.TvInputInfo
 import android.media.tv.TvInputManager
+import android.os.Build
+import android.provider.Settings
 import android.util.Log
 
 /**
@@ -17,16 +19,20 @@ import android.util.Log
  * TCL / FFalcon China firmware (tcl_mt5879_cn and relatives) is handled by
  * [Tcl]: no TvInputFramework inputs are registered, the backlight only lives
  * in TCL's private PQ stack, and TCL's own settings app is the only thing
- * that answers a settings intent.
+ * that answers a settings intent. Xiaomi's China firmware is handled by [Xiaomi].
  */
 class TvControls(private val ctx: Context) {
     private val audio = ctx.getSystemService(AudioManager::class.java)
     private var braviaVolume = false
+    private var xiaomiBacklight = false
 
-    /** The backlight has no standard Android API, so this is null (and the slider hidden) off Sony TVs. */
-    fun brightness(): Bravia.Level? = Bravia.brightness()
+    /** The backlight has no standard Android API, so this is null (and the slider hidden) off Sony and Xiaomi TVs. */
+    fun brightness(): Bravia.Level? {
+        Bravia.brightness()?.let { xiaomiBacklight = false; return it }
+        return Xiaomi.brightness(ctx).also { xiaomiBacklight = it != null }
+    }
 
-    fun setBrightness(v: Int) = Bravia.setBrightness(v)
+    fun setBrightness(v: Int) = if (xiaomiBacklight) Xiaomi.setBrightness(ctx, v) else Bravia.setBrightness(v)
 
     fun volume(): Bravia.Level? {
         Bravia.volume()?.let { braviaVolume = true; return it }
@@ -55,6 +61,7 @@ class TvControls(private val ctx: Context) {
 
     fun setInput(i: Bravia.Input) {
         if (i.uri.startsWith(Tcl.URI_PREFIX)) { Tcl.setInput(ctx); return }
+        if (i.uri.startsWith(Xiaomi.URI_PREFIX)) { Xiaomi.setInput(ctx, i.uri); return }
         if (!i.uri.startsWith("content:")) { Bravia.setInput(i.uri); return }
         // Android's way to show an HDMI input: open its passthrough channel in the TV's own player.
         try {
@@ -64,17 +71,19 @@ class TvControls(private val ctx: Context) {
         }
     }
 
-    /** The TV maker's own settings app where the standard intent is not answered (TCL). */
-    fun settingsIntent(): Intent = Tcl.settingsIntent(ctx) ?: Intent(android.provider.Settings.ACTION_SETTINGS)
+    /** The TV maker's own settings app where the standard intent is not answered (TCL, Xiaomi). */
+    fun settingsIntent(): Intent = Tcl.settingsIntent(ctx) ?: Xiaomi.settingsIntent(ctx) ?: Intent(android.provider.Settings.ACTION_SETTINGS)
+
+    fun wifiIntent(): Intent = Xiaomi.wifiIntent(ctx) ?: Intent(android.provider.Settings.ACTION_WIFI_SETTINGS)
 
     /** HDMI ports from the TV input framework; devices behind a port (CEC) are left out. */
     private fun androidInputs(): List<Bravia.Input> {
         val tim = ctx.getSystemService(TvInputManager::class.java) ?: return emptyList()
         return try {
-            tim.tvInputList.filter { it.type == TvInputInfo.TYPE_HDMI && it.parentId == null }.map {
+            tim.tvInputList.filter { it.type == TvInputInfo.TYPE_HDMI && it.parentId == null && !Xiaomi.hidden(it.id) }.map {
                 val title = it.loadLabel(ctx).toString()
                 Bravia.Input(
-                    TvContract.buildChannelUriForPassthroughInput(it.id).toString(),
+                    Xiaomi.inputUri(ctx, it.id) ?: TvContract.buildChannelUriForPassthroughInput(it.id).toString(),
                     title,
                     it.loadCustomLabel(ctx)?.toString()?.takeIf { l -> l != title }.orEmpty(),
                     tim.getInputState(it.id) == TvInputManager.INPUT_STATE_CONNECTED,
@@ -127,4 +136,60 @@ private object Tcl {
     private fun start(ctx: Context, i: Intent): Boolean = runCatching {
         ctx.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); true
     }.getOrElse { Log.w("TvControls", "TCL start failed for $i", it); false }
+}
+
+/**
+ * Xiaomi / Redmi China firmware (PatchWall, HyperOS TV). From Aerial's device notes
+ * (github.com/pengchujin/aerial-tv, docs/devices/xiaomi-*.md):
+ *
+ * - Backlight: Settings.Global "picture_backlight", 0–100, applied by the firmware's TV menu
+ *   service as soon as it changes. Writing it needs WRITE_SECURE_SETTINGS (granted with the guard).
+ * - Inputs: the generic passthrough intent has no handler; Xiaomi's player switches with
+ *   EXTSRC_PLAY, where MediaTek hardware ids HW5.. map onto source ids 23... MiTV-MFTR0 also
+ *   registers an HDMI input HW8 with no connector behind it.
+ * - Settings and Wi-Fi: Xiaomi's own settings app.
+ */
+private object Xiaomi {
+    const val URI_PREFIX = "xiaomi-input:"
+    private const val PLAYER = "com.xiaomi.mitv.tvplayer"
+    private const val SETTINGS = "com.xiaomi.mitv.settings"
+    private const val BACKLIGHT = "picture_backlight"
+
+    private fun hw(id: String): Int? = Regex("""/HW(\d+)$""").find(id)?.groupValues?.get(1)?.toIntOrNull()
+
+    private fun installed(ctx: Context, pkg: String) =
+        runCatching { ctx.packageManager.getPackageInfo(pkg, 0); true }.getOrDefault(false)
+
+    fun hidden(id: String) = Build.MODEL in setOf("MiTV_MFTR0", "MiTV-MFTR0") && hw(id) == 8
+
+    fun inputUri(ctx: Context, id: String): String? =
+        if (installed(ctx, PLAYER)) hw(id)?.let { "$URI_PREFIX${it + 18}" } else null
+
+    fun setInput(ctx: Context, uri: String) {
+        val n = uri.removePrefix(URI_PREFIX).toIntOrNull() ?: return
+        runCatching {
+            ctx.startActivity(Intent("com.xiaomi.mitv.tvplayer.EXTSRC_PLAY")
+                .setComponent(ComponentName(PLAYER, "$PLAYER.ExternalSourceActivity"))
+                .putExtra("input", n)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }.onFailure { Log.w("TvControls", "Xiaomi input $n failed", it) }
+    }
+
+    fun brightness(ctx: Context): Bravia.Level? {
+        val r = ctx.contentResolver
+        if (Settings.Global.getString(r, BACKLIGHT) == null || !Guard.hasSecureSettings(ctx)) return null
+        return Bravia.Level(Settings.Global.getInt(r, BACKLIGHT, 50), 0, 100)
+    }
+
+    fun setBrightness(ctx: Context, v: Int) =
+        runCatching { Settings.Global.putInt(ctx.contentResolver, BACKLIGHT, v.coerceIn(0, 100)) }.isSuccess
+
+    fun settingsIntent(ctx: Context) = resolvable(ctx, Intent("com.xiaomi.mitv.settings.SETTINGS")
+        .setComponent(ComponentName(SETTINGS, "$SETTINGS.entry.MainActivity")))
+
+    fun wifiIntent(ctx: Context) = resolvable(ctx, Intent("com.xiaomi.mitv.settings.WIFI_SETTINGS")
+        .setComponent(ComponentName(SETTINGS, "$SETTINGS.wifi.MitvWifiActivity")))
+
+    /** PackageManager checks an explicit component; Intent.resolveActivity would return it unchecked. */
+    private fun resolvable(ctx: Context, i: Intent): Intent? = if (ctx.packageManager.resolveActivity(i, 0) != null) i else null
 }

@@ -15,6 +15,14 @@
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
+    <!-- Granted over adb (AGENTS.md step 4) or through local adb from 主屏幕设置, never asked on screen:
+         - WRITE_SECURE_SETTINGS: switch the home guard back on after the firmware switched it off,
+           keep ADB debugging on, keep the photo frame as the screensaver, Xiaomi backlight.
+         - SYSTEM_ALERT_WINDOW: Android's exemption for opening the home screen right after boot. -->
+    <uses-permission
+        android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <application
         android:name=".App"
@@ -24,26 +32,22 @@
         android:label="@string/app_name"
         android:largeHeap="false"
         android:supportsRtl="false"
-        android:usesCleartextTraffic="true"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:theme="@style/Theme.TVHome">
 
         <activity
             android:name=".HomeActivity"
             android:clearTaskOnLaunch="true"
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode|density"
-            android:excludeFromRecents="true"
             android:exported="true"
             android:launchMode="singleTask"
             android:resizeableActivity="false"
             android:screenOrientation="landscape"
             android:stateNotNeeded="true"
-            android:windowSoftInputMode="adjustNothing">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.HOME" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-        </activity>
+            android:windowSoftInputMode="adjustNothing" />
+        <!-- The HOME (standard) or launcher (guard) intent filter comes from the flavor's manifest.
+             No excludeFromRecents: where Tigris is not the system home, Android trims an excluded
+             task as soon as it leaves the front, and the guard would bring back a fresh screen. -->
 
         <activity
             android:name=".SettingsActivity"
@@ -86,5 +90,46 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
+
+        <activity
+            android:name=".PhoneActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:screenOrientation="landscape"
+            android:theme="@style/Theme.TVHome" />
+
+        <!-- Options set from a computer with am broadcast (see ConfigReceiver and AGENTS.md).
+             Only the adb shell (and the system) hold this permission. -->
+        <receiver
+            android:name=".ConfigReceiver"
+            android:exported="true"
+            android:permission="android.permission.WRITE_SECURE_SETTINGS">
+            <intent-filter>
+                <action android:name="com.leslie.tvhome.CONFIG" />
+            </intent-filter>
+        </receiver>
+
+        <service
+            android:name=".HomeGuardService"
+            android:exported="true"
+            android:label="@string/guard_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/home_guard" />
+        </service>
+
+        <service
+            android:name=".RevivalListener"
+            android:exported="true"
+            android:label="@string/guard_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

@@ -5,17 +5,25 @@ You are installing Tigris, an Android TV launcher, onto the user's TV from their
 ## Hard rules
 
 - Never run `svc power shutdown`, `svc power reboot`, `reboot` or `input keyevent KEYCODE_POWER` / `KEYCODE_SLEEP` without asking. A powered-off TV can only be turned back on with its remote.
-- Never `pm uninstall` a system app or the TV's own launcher. If the stock launcher keeps taking over, disable it only with the user's consent (step 5), and tell them how to undo it.
+- Never `pm uninstall` a system app or the TV's own launcher.
+- **Never disable the stock launcher on Xiaomi / Redmi** (`com.mitv.tvhome`, PatchWall). The fallback home refuses third-party launchers too, so the TV boots to a black screen. On Xiaomi, TCL and similar firmwares use the home guard (section 10) instead. On other TVs, disable a launcher only with the user's consent (step 5), and tell them how to undo it.
 - Before you send `KEYCODE_DPAD_CENTER` / `ENTER` on the TV, check what is focused (step 6). Many Tigris buttons power the TV off or put it to sleep.
 - Do not change other TV settings (animation scales, app permissions, background restrictions) unless the user asks.
 
 ## 0. What you need
 
 - A computer on the same local network as the TV, with `adb` installed (Android SDK Platform-Tools). Check with `adb version`. If it is missing, install it: Windows `winget install Google.PlatformTools`, macOS `brew install android-platform-tools`, Debian/Ubuntu `apt install adb`.
-- The TV's IP address. Ask the user. It is under Settings → Network & Internet → (connected network) on most Android TVs.
-- Network debugging enabled on the TV. If `adb connect` fails in step 1, walk the user through this:
-  1. Open Settings → Device Preferences → About, and press OK on "Build" seven times to unlock Developer options.
-  2. Open Settings → Device Preferences → Developer options, and turn on "USB debugging". Also turn on "Network debugging" / "ADB over network" if the menu has it.
+- The TV's IP address. Ask the user. It is under Settings → Network (网络) or About (关于) on most TVs.
+- ADB debugging enabled on the TV. Most users have never done this, so if `adb connect` fails in step 1, walk them through it for their brand. Ask for the brand if you don't know it.
+
+| TV | How to turn on ADB |
+|---|---|
+| **Xiaomi / Redmi** | 设置 → 关于 → **产品型号**: press OK repeatedly until it says developer mode is on. Then 设置 → 账号与安全: turn on **ADB 调试** and **安装未知来源的应用**. |
+| **TCL / FFalcon (雷鸟)** | 设置 → 关于 → **本机信息**, then press **Up, Down, Left, Right** on the remote, less than a second apart. A **更多** group appears at the bottom; turn on **ADB** there. |
+| **Sony BRAVIA** | Settings → System → About → press OK on **Build** (Android TV OS build) 7 times. Then Settings → System → Developer options → turn on **USB debugging**. |
+| **Stock Android TV / Google TV**, Hisense and others | Settings → Device Preferences → About → press **Build** 7 times. Then turn on **USB debugging** in Developer options (sometimes called Network debugging or ADB debugging). |
+
+The first time the computer connects, the TV asks "Allow USB debugging?" (允许 USB 调试吗？). The user must choose **Allow** (允许) and tick **Always allow** (始终允许).
 
 ## 1. Connect
 
@@ -24,37 +32,87 @@ adb connect <TV_IP>:5555
 adb -s <TV_IP>:5555 get-state     # should print "device"
 ```
 
-If it prints `unauthorized`, the TV is showing "Allow USB debugging?". Ask the user to tick "Always allow from this computer" and press Allow, then retry. Use `-s <TV_IP>:5555` on every later command.
+If it prints `unauthorized`, the TV is showing "Allow USB debugging?". Ask the user to tick "Always allow from this computer" and press Allow, then retry. If the connection is refused, ADB is off (step 0). Xiaomi turns it off again on every wake from standby until Tigris's "keep ADB on" option is set (step 4). Use `-s <TV_IP>:5555` on every later command.
 
 ## 2. Check the TV
 
 ```sh
 adb -s <TV_IP>:5555 shell getprop ro.build.version.sdk          # must be >= 28 (Android 9)
-adb -s <TV_IP>:5555 shell getprop ro.product.manufacturer       # "Sony" adds the brightness slider (step 7)
+adb -s <TV_IP>:5555 shell getprop ro.product.manufacturer
 adb -s <TV_IP>:5555 shell getprop ro.product.model
 adb -s <TV_IP>:5555 shell cmd package resolve-activity -a android.intent.action.MAIN -c android.intent.category.HOME
 adb -s <TV_IP>:5555 shell settings get secure screensaver_components
+adb -s <TV_IP>:5555 shell settings get secure enabled_accessibility_services
 ```
 
-Note the current home activity (the stock launcher) and the current screensaver; you need them to undo the install. Tell the user which features they will get (see the compatibility table in README.md). On TVs other than Sony, volume and HDMI switching use standard Android APIs, and the brightness slider is hidden. Section 9 covers adapting the app when something doesn't work.
+Note the current home activity (the stock launcher), the current screensaver and the accessibility services; you need them to undo the install. Tell the user which features they will get (see the compatibility table in README.md). Section 9 covers adapting the app when something doesn't work.
 
 ## 3. Install
 
-Download the latest release APK and install it:
+There are two builds:
+
+- `Tigris.apk` (standard) declares itself a home screen. Use it everywhere except TCL.
+- `Tigris-guard.apk` declares no home screen and appears as an ordinary app. TCL refuses any APK that declares one unless TCL signed it. The guard build is otherwise identical; the home guard (section 10) keeps it in front.
 
 ```sh
 curl -L -o Tigris.apk https://github.com/lesnolie/Tigris/releases/latest/download/Tigris.apk
 adb -s <TV_IP>:5555 install -r Tigris.apk
 ```
 
-If GitHub is unreachable, build from source instead: clone the repo, then `./gradlew assembleRelease` (needs JDK 17 and an Android SDK; set `sdk.dir` in `local.properties`). The APK is `app/build/outputs/apk/release/app-release.apk`.
+**If it fails with `INSTALL_FAILED_VERIFICATION_FAILURE`** (TCL: its verifier refuses every adb install), install the guard build through TCL's own 多屏互动 (T-Cast) instead. It needs Python 3 and the repository's `tools/tcast-push.py`:
+
+```sh
+curl -L -o Tigris-guard.apk https://github.com/lesnolie/Tigris/releases/latest/download/Tigris-guard.apk
+curl -L -o tcast-push.py https://raw.githubusercontent.com/lesnolie/Tigris/main/tools/tcast-push.py
+python3 tcast-push.py <TV_IP> Tigris-guard.apk
+```
+
+The script serves the APK from this computer on port 8765. The TV shows "多屏互动：正在发起应用推送" in a corner. Tell the user to choose **同意** on the TV. If the computer's firewall asks, allow the connection. If the script can't reach port 6553 (no 多屏互动 on that model), fall back to installing on the TV itself:
+
+```sh
+adb -s <TV_IP>:5555 push Tigris-guard.apk /sdcard/Download/Tigris.apk
+adb -s <TV_IP>:5555 shell am start -n com.dangbeimarket/.ui.apkmanager.ApkManagerActivity   # if 当贝市场 is installed
+```
+
+Then ask the user to pick Tigris in Dangbei's package manager (or with any file manager on the TV) and install it. Check the result with `adb shell pm path com.leslie.tvhome`.
+
+If GitHub is unreachable, build from source instead: clone the repo, then `./gradlew assembleStandardRelease assembleGuardRelease` (needs JDK 17 and an Android SDK; set `sdk.dir` in `local.properties`). The APKs are `app/build/outputs/apk/standard/release/app-standard-release.apk` and `app/build/outputs/apk/guard/release/app-guard-release.apk`.
 
 ## 4. Make it the home screen
+
+Standard build:
 
 ```sh
 adb -s <TV_IP>:5555 shell cmd package set-home-activity com.leslie.tvhome/.HomeActivity
 adb -s <TV_IP>:5555 shell input keyevent KEYCODE_HOME
 ```
+
+Then grant what only adb can grant. These are needed on every TV whose system keeps the Home key for its own launcher (Xiaomi, TCL, most Chinese firmwares), and harmless elsewhere:
+
+```sh
+P=com.leslie.tvhome
+adb -s <TV_IP>:5555 shell pm grant $P android.permission.WRITE_SECURE_SETTINGS
+adb -s <TV_IP>:5555 shell cmd notification allow_listener $P/$P.RevivalListener
+adb -s <TV_IP>:5555 shell appops set $P SYSTEM_ALERT_WINDOW allow
+adb -s <TV_IP>:5555 shell appops set $P APP_AUTO_START allow      # TCL only; other firmwares print an error, ignore it
+adb -s <TV_IP>:5555 shell appops set $P APP_ASSOC_START allow     # TCL only
+```
+
+| Grant | What it is for |
+|---|---|
+| `WRITE_SECURE_SETTINGS` | Switches the home guard back on after the system turns it off; keeps the photo frame as screensaver; keeps ADB on; Xiaomi's backlight slider |
+| Notification listener | Restarts Tigris about half a second after the system kills it, and at boot. No notification is read |
+| `SYSTEM_ALERT_WINDOW` | Opening the home screen from the background after boot |
+| TCL `APP_AUTO_START` / `APP_ASSOC_START` | TCL blocks third-party apps from starting at boot otherwise |
+
+If step 5 shows the stock launcher coming back, turn on the home guard (section 10). On Xiaomi, also ask whether to keep ADB on: Xiaomi switches ADB off on every wake, which makes later updates through adb impossible until the user turns it on again in settings.
+
+```sh
+adb -s <TV_IP>:5555 shell am broadcast -a com.leslie.tvhome.CONFIG -n com.leslie.tvhome/.ConfigReceiver --ez guard true --ez keep_adb true
+# prints data="guard=true keep_adb=true secure_settings=true"
+```
+
+The user can change both later in 设置 → 桌面守护 / 保持 ADB 调试开启.
 
 ## 5. Verify
 
@@ -64,7 +122,12 @@ Take a screenshot and look at it:
 adb -s <TV_IP>:5555 exec-out screencap -p > tv.png
 ```
 
-You should see a large clock top-left, a row of app tiles on a glass panel near the bottom, and two round icons top-right. If the stock launcher appears instead, run step 4 again and press Home once more. If it still comes back, the vendor launcher is overriding the default. Ask the user whether to disable it, and only then:
+You should see a large clock top-left, a row of app tiles on a glass panel near the bottom, and two round icons top-right. Press Home (`input keyevent KEYCODE_HOME`) and check again.
+
+If the stock launcher appears instead:
+
+- On Xiaomi, TCL and other Chinese firmwares, turn on the home guard (step 4, section 10). **Do not disable the stock launcher on Xiaomi.**
+- On other TVs, run step 4 again and press Home once more. If it still comes back, try the guard first. Only if that fails, ask the user whether to disable the vendor launcher, and only then:
 
 ```sh
 adb -s <TV_IP>:5555 shell pm disable-user --user 0 <stock launcher package>
@@ -75,7 +138,7 @@ On first start the app downloads background photos (needs internet). The first m
 
 ## 6. Local debugging authorization (power, sleep, deep memory cleanup)
 
-On first start Tigris asks to enable these features. When the user presses "开始", the TV shows "Allow debugging?" again, this time from the TV to itself. The user must tick "Always allow" and press Allow. Check the screen with `screencap` and guide them. You can verify afterwards: the Control Center (Back key on the home screen) no longer shows a "本机调试未授权" line.
+On first start Tigris asks to enable these features. When the user presses "开始", the TV shows "Allow debugging?" again, this time from the TV to itself. The user must tick "Always allow" and press Allow. Check the screen with `screencap` and guide them. You can verify afterwards: the Control Center (Back key on the home screen) no longer shows a "本机调试未授权" line. Once this is allowed, Tigris can also give itself the step 4 grants (设置 → 桌面守护 does that).
 
 If you need to press buttons for the user, first find the focused element:
 
@@ -106,8 +169,10 @@ If the first call returns an error or nothing, ask the user to enable Settings �
 
 Tell the user these exist; change them only if asked. All of them are in the Control Center → 设置 (gear), or on the "主屏幕设置" page:
 
-- Photo frame as the system screensaver (电视空闲时显示相框) and the idle time.
-- Background photo change interval, or switch to a gradient theme.
+- **用手机设置壁纸**: shows a QR code. A phone on the same Wi-Fi opens a page to upload its own photos, paste picture links (an image, a random-image API, or a page / JSON listing images; fetched daily), and pick the background and screensaver.
+- Background: Bing photos, anime wallpapers, 我的照片 (uploaded), 自定义链接, or a gradient theme; and the change interval.
+- Photo frame as the system screensaver (电视空闲时显示相框), the idle time, and its content (屏保内容): photos or Apple TV aerial films (streamed from Apple, about 15–20 Mbps; falls back to photos offline). On Xiaomi, which shows its own screensaver instead of Android's, the home screen starts the frame 15 s before Xiaomi's would.
+- HDMI inputs on the home screen: Control Center → 输入源 → 在主屏幕上显示….
 - Apps kept alive by memory cleanup.
 
 ## 9. Adapting Tigris to a TV that isn't fully supported
@@ -118,12 +183,15 @@ Do this only when the user asks for it, or agrees after you report what doesn't 
 - The volume slider moves but the sound doesn't change, for example when audio goes to an amplifier over ARC.
 - The input row says "无法读取电视的输入源", or picking an HDMI input does nothing.
 
-All three live in [`TvControls.kt`](app/src/main/java/com/leslie/tvhome/TvControls.kt). It tries Sony's API first, then standard Android. A new brand is one more branch there, usually gated on `Build.MANUFACTURER`. Don't change the Sony or standard paths. TCL / FFalcon China firmware already has a branch (the `Tcl` object): inputs open LiveTV's own source picker, settings open `com.tcl.settings`, and brightness stays hidden.
+All three live in [`TvControls.kt`](app/src/main/java/com/leslie/tvhome/TvControls.kt). It tries Sony's API first, then standard Android. A new brand is one more branch there, usually gated on `Build.MANUFACTURER`. Don't change the Sony or standard paths. Two brands already have a branch:
+
+- TCL / FFalcon China firmware (the `Tcl` object): inputs open LiveTV's own source picker, settings open `com.tcl.settings`, and brightness stays hidden.
+- Xiaomi China firmware (the `Xiaomi` object): backlight through `Settings.Global picture_backlight` (needs the `WRITE_SECURE_SETTINGS` grant), inputs through Xiaomi's player (`EXTSRC_PLAY`), settings and Wi-Fi through `com.xiaomi.mitv.settings`.
 
 ### 9.1 Set up a build
 
-- Clone https://github.com/lesnolie/Tigris. You need JDK 17+ (`java -version`) and an Android SDK with `platforms;android-36` and `build-tools` (install them with `sdkmanager`). Put `sdk.dir=<path>` in `local.properties`. Build with `./gradlew assembleRelease`.
-- Your build is signed with this computer's debug key, which differs from the Release APK. `adb install -r` will fail with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. Ask the user before you `adb uninstall com.leslie.tvhome` first: it resets the app's settings, and afterwards you must redo step 4 and the user must allow local debugging again (step 6).
+- Clone https://github.com/lesnolie/Tigris. You need JDK 17+ (`java -version`) and an Android SDK with `platforms;android-36` and `build-tools` (install them with `sdkmanager`). Put `sdk.dir=<path>` in `local.properties`. Build with `./gradlew assembleStandardRelease` (or `assembleGuardRelease` for TCL).
+- Your build is signed with this computer's debug key, which differs from the Release APK. `adb install -r` will fail with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. Ask the user before you `adb uninstall com.leslie.tvhome` first: it resets the app's settings and grants, and afterwards you must redo step 4 and the user must allow local debugging again (step 6).
 
 ### 9.2 Find what the TV offers
 
@@ -138,31 +206,39 @@ Work from adb. Before you write anything, note each value you read; restore the 
 ### 9.3 Implement and verify
 
 - Add the branch to `TvControls.kt`. `brightness()` returning a non-null `Bravia.Level(value, min, max)` makes the slider appear; `setBrightness` is then called with values in that range. All of these run on a background thread, so blocking I/O is fine.
-- The app has no permission to write settings. Pick one of these:
-  - Grant `WRITE_SECURE_SETTINGS` with `adb shell pm grant com.leslie.tvhome android.permission.WRITE_SECURE_SETTINGS`, after adding it to the manifest. Note that the grant is lost on uninstall.
-  - Grant `WRITE_SETTINGS` (system table) with `adb shell appops set com.leslie.tvhome WRITE_SETTINGS allow`.
-  - Run the command through the app's own local adb, `LocalAdb.shell(ctx, "settings put …")` in `Cleaner.kt`. This works once the user has allowed local debugging.
+- Writing settings: secure and global settings can be written directly once `WRITE_SECURE_SETTINGS` is granted (step 4; check with `Guard.hasSecureSettings`). For the system table, grant `WRITE_SETTINGS` with `adb shell appops set com.leslie.tvhome WRITE_SETTINGS allow`, or run the command through the app's own local adb, `LocalAdb.shell(ctx, "settings put …")` in `Cleaner.kt`, which works once the user has allowed local debugging.
 - Build, install, open the Control Center (Back on the home screen), and `screencap`. Move to the slider with D-pad keys, checking the focused element first (step 6). Then read the value back the same way as in 9.2 to confirm the change.
 
 ### 9.4 Finish
 
 Tell the user what now works and what still doesn't. Their adapted build stays on their TV. If they want to share it, offer to commit the change on their own fork and open a pull request to `lesnolie/Tigris` with their GitHub account, naming the TV model and Android version. Never push to the upstream repository directly.
 
-## 10. TVs whose system fights third-party launchers
+## 10. TVs whose system fights third-party launchers: the home guard
 
-Many Chinese TV systems (Xiaomi PatchWall, TCL, Hisense VIDAA-on-Android, Skyworth and others) aren't stock Android TV. The Home key goes back to the vendor launcher no matter what the default is, and third-party apps get killed in standby. Tigris has only been verified on Sony, plus a community test of the Control Center on a TCL/FFalcon (on that firmware `adb install` fails with `INSTALL_FAILED_VERIFICATION_FAILURE`, and a second third-party launcher left enabled brought back the home picker after a cold boot; `pm disable-user` on it fixed that). Treat this section as a playbook. Go through the levels in order and stop at the first one that works. Ask the user before each level, explain what it changes, and record how to undo it. None of these need root, and none uninstall or disable a system app.
+Many Chinese TV systems (Xiaomi PatchWall, TCL, Hisense VIDAA-on-Android, Skyworth and others) aren't stock Android TV. What is known (from Tigris's own testing and from [Aerial](https://github.com/pengchujin/aerial-tv)'s device notes):
 
-First, find out what actually happens: press Home with `adb shell input keyevent KEYCODE_HOME`, then check `adb shell dumpsys activity activities | grep -m1 ResumedActivity`. Put the TV in standby and wake it, then check whether `pidof com.leslie.tvhome` still finds the app.
+- **Xiaomi** accepts `set-home-activity` and the HOME role, and both report success, yet Home still opens PatchWall (`com.mitv.tvhome`): only a system whitelist decides. On standby Xiaomi force-stops every third-party app, which also switches off their accessibility services. It also turns ADB off on each wake.
+- **TCL** refuses adb installs and home-screen APKs (step 3), blocks boot autostart for third-party apps, and may write its own screensaver back at boot.
 
-1. **Default home, the standard way.** Run `cmd package set-home-activity` (step 4). On Android 10+ also try `adb shell cmd role add-role-holder android.app.role.HOME com.leslie.tvhome`. Some vendors offer a launcher choice in their own settings (search the settings app for "桌面" / "launcher").
-2. **Let it stay alive.** Run these commands:
-   - `adb shell dumpsys deviceidle whitelist +com.leslie.tvhome`
-   - `adb shell cmd appops set com.leslie.tvhome RUN_ANY_IN_BACKGROUND allow`
-   - `adb shell cmd appops set com.leslie.tvhome RUN_IN_BACKGROUND allow`
+Tigris handles this without root, and without disabling or uninstalling anything:
 
-   Also look for the vendor's own "自启动 / 后台管理 / 加速白名单" settings or its cleaner app, and whitelist Tigris there. Test standby again.
-3. **Re-assert after wake-up.** If the default home is reset in standby, the app can set it back itself through local adb (step 6 authorization). Add a `SCREEN_ON` receiver in `KeeperService` that runs `cmd package set-home-activity com.leslie.tvhome/.HomeActivity` via `LocalAdb.shell`, and starts `HomeActivity` if the vendor launcher is in front. Build and verify per 9.3.
-4. **Strongest: follow the Home key with an accessibility service.** When the vendor launcher's window comes to the front (`TYPE_WINDOW_STATE_CHANGED` with its package), immediately start `HomeActivity`. The user sees at most a flash. This needs a new `AccessibilityService` in the app, enabled with `adb shell settings put secure enabled_accessibility_services com.leslie.tvhome/<service class>` and `settings put secure accessibility_enabled 1`. Make it an opt-in setting, off by default. Some vendors revoke accessibility services from apps they don't trust; re-check after a standby cycle.
+1. **Home guard**, an accessibility service ("主屏幕守护"). When the stock launcher's home screen comes to the front, Tigris is brought back on top (the user sees the stock launcher for about half a second). While the user deliberately opens the stock launcher from its tile, the Home key returns to Tigris. It watches window changes only, never screen content.
+2. **Revival**: the notification listener from step 4. Android rebinds it about half a second after the system kills Tigris, so Tigris restarts and switches the guard back on (with `WRITE_SECURE_SETTINGS`). It also starts Tigris at boot.
+3. **Keep ADB on** (optional): when Xiaomi switches ADB debugging off, Tigris switches it straight back on.
+4. With the guard on, Tigris also puts its screensaver back when the firmware overwrites it.
+
+Turn it on with the step 4 grants and the `CONFIG` broadcast, or on the TV in 设置 → 桌面守护 (which grants itself through local adb once step 6 is done). Then check:
+
+```sh
+adb -s <TV_IP>:5555 shell settings get secure enabled_accessibility_services   # contains com.leslie.tvhome/com.leslie.tvhome.HomeGuardService
+adb -s <TV_IP>:5555 shell input keyevent KEYCODE_HOME; sleep 2
+adb -s <TV_IP>:5555 shell dumpsys activity activities | grep -m1 ResumedActivity  # com.leslie.tvhome/.HomeActivity
+adb -s <TV_IP>:5555 logcat -d -s TigrisGuard                                     # what the guard did and why
+```
+
+Then ask the user to put the TV in standby and wake it, and check again that Tigris is in front and the guard is still listed. If the user agrees to a reboot, check after boot too. The guard waits 1.5 s after boot or wake before taking over, so a game console or set-top box switching the TV to its HDMI input over CEC is left alone.
+
+If the guard is listed but `dumpsys accessibility` shows no bound service for it, Tigris re-registers it by itself within a few seconds of opening; if it stays unbound, toggle it off and on in 设置 → 桌面守护.
 
 If nothing works, tell the user plainly: that TV's system doesn't allow a replacement launcher, and Tigris can still be opened as an app.
 
@@ -176,12 +252,12 @@ Only on request. Tigris's long-press menu can delete preinstalled apps that appe
 
 ## Uninstall
 
+First turn the guard off, so the accessibility list goes back to what it was (the value noted in step 2), and put the original screensaver back if the photo frame was made the screensaver:
+
 ```sh
+adb -s <TV_IP>:5555 shell am broadcast -a com.leslie.tvhome.CONFIG -n com.leslie.tvhome/.ConfigReceiver --ez guard false --ez keep_adb false
+adb -s <TV_IP>:5555 shell settings put secure screensaver_components <original value>
 adb -s <TV_IP>:5555 uninstall com.leslie.tvhome
 ```
 
-The TV falls back to its stock launcher. If you disabled it in step 5, re-enable it first. If the photo frame was made the screensaver, put the original back (the value noted in step 2):
-
-```sh
-adb -s <TV_IP>:5555 shell settings put secure screensaver_components <original value>
-```
+The TV falls back to its stock launcher. If you disabled a launcher in step 5, re-enable it with `pm enable <package>`.

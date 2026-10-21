@@ -21,16 +21,25 @@ import java.net.URL
  *   ~15 days are fetched once a day.
  * - [ANIME]: the month's most popular anime wallpapers on Wallhaven, SFW
  *   only, a dozen new ones a day.
+ * - [MINE]: photos sent from a phone (PhoneServer); never pruned.
+ * - [CUSTOM]: links the user added ([Prefs.customWallUrls]). A link may be a
+ *   picture, an API that answers with a different picture each time, or a
+ *   page / JSON that lists picture addresses.
  * Older pictures are kept up to [MAX_FILES].
  */
 class Wallpapers(private val ctx: Context, private val source: String = BING) {
-    private val dir = File(ctx.filesDir, if (source == ANIME) "wall-anime" else "wall").apply { mkdirs() }
+    private val dir = File(ctx.filesDir, when (source) {
+        ANIME -> "wall-anime"
+        MINE -> "wall-mine"
+        CUSTOM -> "wall-custom"
+        else -> "wall"
+    }).apply { mkdirs() }
     private val metaFile = File(dir, "meta.json")
 
     /** Cached files, newest first (Bing files are named by date; others by download time). */
     fun files(): List<File> {
         val all = dir.listFiles { f -> f.name.endsWith(".jpg") } ?: return emptyList()
-        return if (source == ANIME) all.sortedByDescending { it.lastModified() } else all.sortedByDescending { it.name }
+        return if (source == BING) all.sortedByDescending { it.name } else all.sortedByDescending { it.lastModified() }
     }
 
     /** The photo for the current time slot when rotating every [minutes]. */
@@ -48,11 +57,24 @@ class Wallpapers(private val ctx: Context, private val source: String = BING) {
 
     /** Blocking; fetches new photos if the last refresh is older than ~a day. */
     fun refresh(force: Boolean = false) {
+        if (source == MINE) return
+        // One download per source at a time: the home screen and the phone page may both ask, and a
+        // second run would otherwise fetch a random-picture link all over again.
+        synchronized(LOCKS.getOrPut(source) { Any() }) { refreshLocked(force) }
+    }
+
+    private fun refreshLocked(force: Boolean) {
         val stamp = File(dir, "stamp")
-        if (!force && stamp.exists() && metaFile.exists() && System.currentTimeMillis() - stamp.lastModified() < 20 * 3_600_000L && files().size >= 4) return
+        val fresh = stamp.exists() && metaFile.exists() && System.currentTimeMillis() - stamp.lastModified() < 20 * 3_600_000L
+        // A custom link may well be a single picture, so four files are not required there.
+        if (!force && fresh && (files().size >= 4 || source == CUSTOM)) return
         val meta = try { JSONObject(metaFile.readText()) } catch (e: Exception) { JSONObject() }
         try {
-            if (source == ANIME) fetchAnime(meta) else fetchBing(meta)
+            when (source) {
+                ANIME -> fetchAnime(meta)
+                CUSTOM -> fetchCustom(meta)
+                else -> fetchBing(meta)
+            }
             files().drop(MAX_FILES).forEach { meta.remove(it.name); it.delete() }
             metaFile.writeText(meta.toString())
             stamp.writeText(System.currentTimeMillis().toString())
@@ -105,6 +127,89 @@ class Wallpapers(private val ctx: Context, private val source: String = BING) {
         }
     }
 
+    /**
+     * Each link is fetched once; when it answers with a picture it is asked again (random-picture
+     * APIs give a new one each time) until a repeat or [PER_LINK]. Anything else is searched for
+     * picture addresses, JSON included.
+     */
+    private fun fetchCustom(meta: JSONObject) {
+        val links = Prefs(ctx).customWallUrls.lines().map { it.trim() }.filter { it.startsWith("http://") || it.startsWith("https://") }
+        for (link in links) {
+            val host = runCatching { URL(link).host }.getOrDefault(link)
+            val first = runCatching { fetch(link) }.getOrNull() ?: continue
+            if (first.second?.startsWith("image/") == true || looksLikeImage(first.first)) {
+                var bytes: ByteArray? = first.first
+                var n = 0
+                while (bytes != null && n < PER_LINK) {
+                    if (!save(bytes, meta, host)) break
+                    n++
+                    bytes = runCatching { fetch(link).first }.getOrNull()
+                }
+            } else {
+                val text = first.first.decodeToString().replace("\\/", "/")
+                IMAGE_URL.findAll(text).map { it.value }.distinct().take(PER_PAGE).forEach { u ->
+                    runCatching { save(fetch(u).first, meta, host) }
+                }
+            }
+        }
+    }
+
+    /** Stores a picture under a name taken from its content; false if it is not one or is already here. */
+    private fun save(bytes: ByteArray, meta: JSONObject, caption: String): Boolean {
+        val name = "u-" + hash(bytes) + ".jpg"
+        if (File(dir, name).exists() || !write(bytes, name)) return false
+        meta.put(name, caption)
+        return true
+    }
+
+    /** A photo sent from a phone, for [MINE]. Returns its file name, or null if it isn't a picture. */
+    fun add(bytes: ByteArray): String? {
+        val name = "my-" + hash(bytes) + ".jpg"
+        return if (File(dir, name).exists() || write(bytes, name)) name else null
+    }
+
+    private fun write(bytes: ByteArray, name: String): Boolean {
+        val bmp = fitScreen(bytes) ?: return false
+        val tmp = File(dir, "$name.part")
+        tmp.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+        bmp.recycle()
+        return tmp.renameTo(File(dir, name))
+    }
+
+    fun delete(name: String) {
+        if (name.contains('/') || !name.endsWith(".jpg")) return
+        File(dir, name).delete()
+    }
+
+    private fun hash(b: ByteArray) =
+        java.security.MessageDigest.getInstance("MD5").digest(b).joinToString("") { "%02x".format(it) }.take(16)
+
+    private fun looksLikeImage(b: ByteArray) = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        .also { BitmapFactory.decodeByteArray(b, 0, b.size, it) }.outWidth > 0
+
+    /** GET with the content type, following redirects across http and https (HttpURLConnection won't). */
+    private fun fetch(url: String): Pair<ByteArray, String?> {
+        var u = url
+        repeat(5) {
+            val c = URL(u).openConnection() as HttpURLConnection
+            c.connectTimeout = 8000
+            c.readTimeout = 15000
+            c.instanceFollowRedirects = false
+            c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 12) Tigris")
+            val code = c.responseCode
+            if (code in 300..399) {
+                u = URL(URL(u), c.getHeaderField("Location") ?: error("redirect without Location")).toString()
+                c.disconnect()
+                return@repeat
+            }
+            if (code !in 200..299) error("HTTP $code")
+            if (c.contentLengthLong > MAX_DOWNLOAD) error("too large")
+            val bytes = c.inputStream.use { it.readBytes() }
+            return bytes to c.contentType
+        }
+        error("too many redirects")
+    }
+
     /** Decodes a large picture straight down to 1920x1080. */
     private fun fitScreen(bytes: ByteArray): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -149,10 +254,25 @@ class Wallpapers(private val ctx: Context, private val source: String = BING) {
         const val MAX_FILES = 40
         const val BING = "daily"
         const val ANIME = "anime"
+        const val MINE = "mine"
+        const val CUSTOM = "custom"
+        val SOURCES = listOf(BING, ANIME, MINE, CUSTOM)
+        private val LOCKS = java.util.concurrent.ConcurrentHashMap<String, Any>()
+        private const val PER_LINK = 6
+        private const val PER_PAGE = 12
+        private const val MAX_DOWNLOAD = 15L * 1024 * 1024
+        private val IMAGE_URL = Regex("""https?://[^\s"'<>()\\]+?\.(?:jpe?g|png|webp)(?:\?[^\s"'<>()\\]*)?""", RegexOption.IGNORE_CASE)
+
+        fun label(source: String) = when (source) {
+            ANIME -> "二次元壁纸"
+            MINE -> "我的照片"
+            CUSTOM -> "自定义链接"
+            else -> "风景照片"
+        }
 
         /** The picture source behind a [Prefs.background] value; gradient themes fall back to Bing. */
-        fun sourceFor(background: String) = if (background == ANIME) ANIME else BING
-        fun isPhoto(background: String) = background == BING || background == ANIME
+        fun sourceFor(background: String) = if (background in SOURCES) background else BING
+        fun isPhoto(background: String) = background in SOURCES
 
         /** Cheap, smooth blur: shrink, box-blur three times, let the view scale it back up. */
         fun blurred(src: Bitmap, darken: Float = 0.45f): Bitmap {

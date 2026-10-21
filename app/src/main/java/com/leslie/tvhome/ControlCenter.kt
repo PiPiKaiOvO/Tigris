@@ -556,7 +556,20 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         for (i in inputs) sheet.button(i.name, R.drawable.ic_input) {
             io.execute { tv.setInput(i) }
         }
+        sheet.button("在主屏幕上显示…") { pinInputs() }
         sheet.button("取消") {}
+        home.showSheet(sheet)
+    }
+
+    /** Inputs shown as tiles on the home grid; one press there switches to them. */
+    private fun pinInputs() {
+        val sheet = Sheet(host).title("在主屏幕上显示")
+            .message("选中的输入源会成为主屏幕上的一个图标，按一下就切换过去。")
+        for (i in inputs) {
+            val on = home.isPinned(i)
+            sheet.button(if (on) "✓  ${i.name}" else i.name, R.drawable.ic_input) { home.pinInput(i, !on) }
+        }
+        sheet.button("完成") {}
         home.showSheet(sheet)
     }
 
