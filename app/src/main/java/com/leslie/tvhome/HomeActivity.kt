@@ -261,6 +261,8 @@ class HomeActivity : Activity(), TileAdapter.Listener {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             clipChildren = false
+            // The padding is the room a focused (enlarged) disc grows into; don't clip it away.
+            clipToPadding = false
             setPadding(dp(8), dp(8), dp(8), dp(8))
         }
         netButton = IconButton(this, R.drawable.ic_wifi) {
