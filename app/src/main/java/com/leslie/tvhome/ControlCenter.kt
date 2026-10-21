@@ -120,11 +120,9 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
             leftMargin = -ctx.dp(6); rightMargin = -ctx.dp(6)
         })
 
-        // Attached for Sony, where the level can be read and set; refresh() hides it (and keeps it out
-        // of the focus ring) elsewhere, so a hidden slider can never take the initial focus.
-        brightness = Slider(R.drawable.ic_sun, "亮度") { v -> tv.setBrightness(v) }
+        brightness = Slider(R.drawable.ic_sun, "亮度") { v -> tv.setBrightness(v) }.also { focusables += it }
         panel.addView(brightness, LinearLayout.LayoutParams(-1, ctx.dp(54)).apply { topMargin = ctx.dp(6) })
-        volume = Slider(R.drawable.ic_volume, "音量", perPress = 2) { v -> tv.setVolume(volumeTarget, v) }.also { focusables += it }
+        volume = Slider(R.drawable.ic_volume, "音量", steps = 50) { v -> tv.setVolume(volumeTarget, v) }.also { focusables += it }
         panel.addView(volume, LinearLayout.LayoutParams(-1, ctx.dp(54)).apply { topMargin = ctx.dp(12) })
 
         inputModule = Module(R.drawable.ic_input, Color.rgb(10, 132, 255), "输入源") { pickInput() }.also { focusables += it }
@@ -338,7 +336,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
     private inner class Slider(
         icon: Int,
         label: String,
-        private val perPress: Int = 0,
+        private val steps: Int = 25,
         private val send: (Int) -> Unit,
     ) : FrameLayout(ctx) {
         private val corner = ctx.dp(27).toFloat()
@@ -374,7 +372,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
                 if (code != KeyEvent.KEYCODE_DPAD_LEFT && code != KeyEvent.KEYCODE_DPAD_RIGHT) return@setOnKeyListener false
                 if (e.action == KeyEvent.ACTION_DOWN && ready) {
                     val dir = if (code == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1
-                    val step = if (perPress > 0) perPress else ((max - min) / 25).coerceAtLeast(1)
+                    val step = ((max - min) / steps).coerceAtLeast(1)
                     val nv = (value + dir * step).coerceIn(min, max)
                     if (nv == value) {
                         if (e.repeatCount == 0) Motion.bump(this, dir, 0)
@@ -515,12 +513,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
             val cur = tv.currentInput()
             host.post {
                 brightness.set(b)
-                // b was fetched on the background executor; do not call BRAVIA again here (UI thread).
-                val showBrightness = b != null
-                brightness.visibility = if (showBrightness) View.VISIBLE else View.GONE
-                val inRing = focusables.contains(brightness)
-                if (showBrightness && !inRing) focusables.add(0, brightness)
-                if (!showBrightness && inRing) focusables.remove(brightness)
+                brightness.visibility = if (b == null) View.GONE else View.VISIBLE
                 v?.target?.takeIf { it.isNotEmpty() }?.let { volumeTarget = it }
                 volume.set(v)
                 inputs = list

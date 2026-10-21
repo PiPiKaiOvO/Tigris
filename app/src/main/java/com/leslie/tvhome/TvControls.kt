@@ -24,12 +24,9 @@ class TvControls(private val ctx: Context) {
     private var braviaVolume = false
 
     /** The backlight has no standard Android API, so this is null (and the slider hidden) off Sony TVs. */
-    fun brightness(): Bravia.Level? = Bravia.brightness() ?: Tcl.brightness(ctx)
+    fun brightness(): Bravia.Level? = Bravia.brightness()
 
-    fun setBrightness(v: Int) {
-        if (Bravia.brightness() != null) { Bravia.setBrightness(v); return }
-        Tcl.setBrightness(ctx)
-    }
+    fun setBrightness(v: Int) = Bravia.setBrightness(v)
 
     fun volume(): Bravia.Level? {
         Bravia.volume()?.let { braviaVolume = true; return it }
@@ -98,8 +95,8 @@ class TvControls(private val ctx: Context) {
  *   handler. LiveTV owns the HDMI ports through its own Unified Source stack, so switching means
  *   opening LiveTV's source picker.
  * - Brightness: TCL ignores the standard `screen_brightness` key and has no sysfs backlight node;
- *   the backlight lives behind `com.tcl.tv.pq` / TPictureManager. The reachable path is TCL's own
- *   settings panel, which opens on its 图像 page where the brightness slider sits.
+ *   the backlight lives behind `com.tcl.tv.pq` / TPictureManager, so the slider stays hidden and
+ *   the backlight is reached through TCL's settings app ([settingsIntent]).
  * - Settings: nothing answers `android.settings.SETTINGS`; TCL's settings app opens with ACTION_MAIN.
  */
 private object Tcl {
@@ -109,18 +106,6 @@ private object Tcl {
 
     private fun installed(ctx: Context, pkg: String) =
         runCatching { ctx.packageManager.getPackageInfo(pkg, 0); true }.getOrDefault(false)
-
-    /**
-     * TCL has no backlight API to read or set, so this returns null and the slider stays hidden.
-     * [TvControls.settingsIntent] still reaches TCL's settings panel, which is where the backlight is.
-     */
-    fun brightness(ctx: Context): Bravia.Level? = null
-
-    /** TCL cannot set the backlight from an app; open its settings panel and let the user adjust it. */
-    fun setBrightness(ctx: Context) {
-        val panel = Intent(Intent.ACTION_MAIN).setComponent(ComponentName(SETTINGS_PKG, "$SETTINGS_PKG.ui.MainActivity"))
-        if (!start(ctx, panel)) start(ctx, Intent(SETTINGS_PKG + ".SHOW_WINDOW").setPackage(SETTINGS_PKG))
-    }
 
     /**
      * One entry, not four: the firmware exposes no way to address a port directly, so claiming a
