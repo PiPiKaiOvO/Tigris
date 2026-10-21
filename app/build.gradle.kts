@@ -11,7 +11,7 @@ android {
         minSdk = 28
         targetSdk = 31
         versionCode = 2
-        versionName = "1.1"
+        versionName = "1.6"
     }
 
     // standard declares itself a home screen. guard does not: TCL's package verifier refuses any
