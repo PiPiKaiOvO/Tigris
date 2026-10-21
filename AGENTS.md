@@ -118,7 +118,7 @@ Do this only when the user asks for it, or agrees after you report what doesn't 
 - The volume slider moves but the sound doesn't change, for example when audio goes to an amplifier over ARC.
 - The input row says "无法读取电视的输入源", or picking an HDMI input does nothing.
 
-All three live in [`TvControls.kt`](app/src/main/java/com/leslie/tvhome/TvControls.kt). It tries Sony's API first, then standard Android. A new brand is one more branch there, usually gated on `Build.MANUFACTURER`. Don't change the Sony or standard paths.
+All three live in [`TvControls.kt`](app/src/main/java/com/leslie/tvhome/TvControls.kt). It tries Sony's API first, then standard Android. A new brand is one more branch there, usually gated on `Build.MANUFACTURER`. Don't change the Sony or standard paths. TCL / FFalcon China firmware already has a branch (the `Tcl` object): inputs open LiveTV's own source picker, settings open `com.tcl.settings`, and brightness stays hidden.
 
 ### 9.1 Set up a build
 
@@ -150,7 +150,7 @@ Tell the user what now works and what still doesn't. Their adapted build stays o
 
 ## 10. TVs whose system fights third-party launchers
 
-Many Chinese TV systems (Xiaomi PatchWall, TCL, Hisense VIDAA-on-Android, Skyworth and others) aren't stock Android TV. The Home key goes back to the vendor launcher no matter what the default is, and third-party apps get killed in standby. Tigris has only been verified on Sony, so treat this section as a playbook. Go through the levels in order and stop at the first one that works. Ask the user before each level, explain what it changes, and record how to undo it. None of these need root, and none uninstall or disable a system app.
+Many Chinese TV systems (Xiaomi PatchWall, TCL, Hisense VIDAA-on-Android, Skyworth and others) aren't stock Android TV. The Home key goes back to the vendor launcher no matter what the default is, and third-party apps get killed in standby. Tigris has only been verified on Sony, plus a community test of the Control Center on a TCL/FFalcon (on that firmware `adb install` fails with `INSTALL_FAILED_VERIFICATION_FAILURE`, and a second third-party launcher left enabled brought back the home picker after a cold boot; `pm disable-user` on it fixed that). Treat this section as a playbook. Go through the levels in order and stop at the first one that works. Ask the user before each level, explain what it changes, and record how to undo it. None of these need root, and none uninstall or disable a system app.
 
 First, find out what actually happens: press Home with `adb shell input keyevent KEYCODE_HOME`, then check `adb shell dumpsys activity activities | grep -m1 ResumedActivity`. Put the TV in standby and wake it, then check whether `pidof com.leslie.tvhome` still finds the app.
 
