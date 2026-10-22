@@ -680,14 +680,25 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         val app = adapter.apps.getOrNull(pos) ?: return
         app.input?.let { i -> io.execute { tv.setInput(i) }; return }
         // The stock launcher (Xiaomi's PatchWall) can only be opened through the system Home action.
-        if (HomeGuardService.isStockHome(app.pkg) && HomeGuardService.openStockLauncher()) return
+        if (HomeGuardService.isStockHome(app.pkg) && HomeGuardService.openStockLauncher()) {
+            rememberOpened(app.pkg)
+            return
+        }
         val intent = repo.launchIntent(app) ?: return
         val opts = ActivityOptions.makeScaleUpAnimation(cell.card, 0, 0, cell.card.width, cell.card.height)
         try {
             startActivity(intent, opts.toBundle())
+            rememberOpened(app.pkg)
         } catch (e: Exception) {
             Toast.makeText(this, "无法打开 ${app.label}", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    /** Only successful app launches reorder the shelf; editing or failed launches never do. */
+    private fun rememberOpened(pkg: String) {
+        val visible = adapter.apps.map { it.pkg }
+        prefs.order = RecentOrder.promote(pkg, visible, prefs.order)
+        reload()
     }
 
     override fun onTileLongPressed(pos: Int, cell: TileCell) {
