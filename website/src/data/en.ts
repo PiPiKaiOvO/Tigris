@@ -109,7 +109,7 @@ export const en = {
   gallery: {
     eyebrow: "SCREENSHOTS",
     title: "Every image comes from a real TV.",
-    lede: "Sony BRAVIA XR-55A80J, Android TV 12, original 1280 × 720 captures. Select one to enlarge.",
+    lede: "Sony BRAVIA XR-55A80J, Android TV 12, original 1280 × 720 captures and screen recordings. Select one to enlarge.",
   },
 
   install: {

@@ -8,6 +8,9 @@
 /img/*
   Cache-Control: public, max-age=604800
 
+/video/*
+  Cache-Control: public, max-age=604800
+
 /_astro/*
   Cache-Control: public, max-age=0, must-revalidate
 

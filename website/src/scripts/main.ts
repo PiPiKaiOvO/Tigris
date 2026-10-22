@@ -301,6 +301,7 @@
   const triggers = Array.from(doc.querySelectorAll<HTMLButtonElement>("[data-lightbox-open]"));
   if (lightbox && triggers.length && typeof lightbox.showModal === "function") {
     const img = lightbox.querySelector<HTMLImageElement>("img");
+    const video = lightbox.querySelector<HTMLVideoElement>("video");
     const caption = lightbox.querySelector<HTMLElement>("[data-lightbox-caption]");
     const counter = lightbox.querySelector<HTMLElement>("[data-lightbox-counter]");
     let index = 0;
@@ -309,15 +310,26 @@
       src: el.dataset.full || "",
       alt: el.dataset.alt || "",
       caption: el.dataset.caption || "",
+      video: el.dataset.video !== undefined,
     }));
 
     const show = (i: number) => {
       index = (i + data.length) % data.length;
       const item = data[index];
-      if (!img) return;
-      img.hidden = false;
-      img.src = item.src;
-      img.alt = item.alt;
+      if (!img || !video) return;
+      img.hidden = item.video;
+      video.hidden = !item.video;
+      if (item.video) {
+        img.removeAttribute("src");
+        video.src = item.src;
+        video.setAttribute("aria-label", item.alt);
+        video.play().catch(() => {});
+      } else {
+        video.pause();
+        video.removeAttribute("src");
+        img.src = item.src;
+        img.alt = item.alt;
+      }
       if (caption) caption.textContent = item.caption;
       if (counter) counter.textContent = `${index + 1} / ${data.length}`;
     };
@@ -329,11 +341,29 @@
     lightbox.querySelector("[data-prev]")?.addEventListener("click", () => show(index - 1));
     lightbox.querySelector("[data-next]")?.addEventListener("click", () => show(index + 1));
     lightbox.querySelector("[data-close]")?.addEventListener("click", () => lightbox.close());
+    lightbox.addEventListener("close", () => video?.pause());
     lightbox.addEventListener("click", (e) => { if (e.target === lightbox) lightbox.close(); });
     lightbox.addEventListener("keydown", (e) => {
       if (e.key === "ArrowRight") show(index + 1);
       if (e.key === "ArrowLeft") show(index - 1);
     });
+  }
+
+  /* ---------- recordings: play while on screen, never with reduced motion ---------- */
+  const clipEls = Array.from(doc.querySelectorAll<HTMLVideoElement>("video[data-clip]"));
+  if (clipEls.length && "IntersectionObserver" in window &&
+      !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    const watch = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          const v = entry.target as HTMLVideoElement;
+          if (entry.intersectionRatio >= 0.2) v.play().catch(() => {});
+          else v.pause();
+        });
+      },
+      { threshold: [0, 0.2] },
+    );
+    clipEls.forEach((v) => watch.observe(v));
   }
 
   /* ---------- reveal on scroll ---------- */

@@ -41,6 +41,15 @@ export const shots = {
   frame: { src: "/img/frame-1280.webp", small: "/img/frame-640.webp" },
 } as const;
 
+/* Real screen recordings (adb screenrecord on the same Sony BRAVIA), 1280x720 H.264 without
+   sound, each with a poster frame taken from the clip itself. Never replace with rendered video. */
+export const clips = {
+  home: { src: "/video/home.mp4", poster: "/img/home-poster.webp" },
+  intro: { src: "/video/intro.mp4", poster: "/img/intro-poster.webp" },
+  settings: { src: "/video/settings.mp4", poster: "/img/settings-poster.webp" },
+  cc: { src: "/video/cc.mp4", poster: "/img/cc-poster.webp" },
+} as const;
+
 export const assets = {
   beforeIllustration: "/img/before-illustration.svg",
   aerialIllustration: "/img/aerial-illustration.svg",

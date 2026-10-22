@@ -110,7 +110,7 @@ export const zh = {
     gallery: {
       eyebrow: "SCREENSHOTS",
       title: "全部来自一台真实的电视。",
-      lede: "索尼 BRAVIA XR-55A80J，Android TV 12，1280 × 720 原始截图。点击任意一张放大查看。",
+      lede: "索尼 BRAVIA XR-55A80J，Android TV 12，1280 × 720 实拍截图和录屏。点击任意一张放大查看。",
     },
 
     install: {
