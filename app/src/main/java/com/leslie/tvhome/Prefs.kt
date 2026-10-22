@@ -37,8 +37,17 @@ class Prefs(ctx: Context) {
 
     /** Packages that memory cleanup never stops (casting receivers etc.). */
     var keep: Set<String>
-        get() = sp.getStringSet("keep", DEFAULT_KEEP)!!.toSet()
-        set(v) = sp.edit().putStringSet("keep", v).apply()
+        get() {
+            val saved = sp.getStringSet("keep", null)?.toSet() ?: return DEFAULT_KEEP
+            // Defaults added in a later version join a list the user already saved, once.
+            val seen = sp.getStringSet("keep_defaults", null) ?: KEEP_UNTRACKED
+            val added = DEFAULT_KEEP - seen
+            if (added.isEmpty()) return saved
+            val merged = saved + added
+            sp.edit().putStringSet("keep", merged).putStringSet("keep_defaults", DEFAULT_KEEP).apply()
+            return merged
+        }
+        set(v) = sp.edit().putStringSet("keep", v).putStringSet("keep_defaults", DEFAULT_KEEP).apply()
 
     var cleanOnStandby: Boolean
         get() = sp.getBoolean("clean_on_standby", true)
@@ -203,9 +212,13 @@ class Prefs(ctx: Context) {
 
         val DEFAULT_KEEP = setOf(
             "com.dangbei.screencast",
+            "com.weekd.miracastreceiver",
             "com.xiaodianshi.tv.yst",
             "dev.vodik7.atvtoolsserver",
         )
+
+        /** The defaults from before new ones were tracked; a list saved then has already seen these. */
+        private val KEEP_UNTRACKED = setOf("com.dangbei.screencast", "com.xiaodianshi.tv.yst", "dev.vodik7.atvtoolsserver")
 
         /** Initial grid order on first run; everything else follows alphabetically. */
         val DEFAULT_ORDER = listOf(
