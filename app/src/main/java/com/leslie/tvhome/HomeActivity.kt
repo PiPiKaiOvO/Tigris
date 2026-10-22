@@ -211,10 +211,18 @@ class HomeActivity : Activity(), TileAdapter.Listener {
 
     // ------------------------------------------------------------------- intro
 
-    /** When the screen last came on; the intro plays if the home screen is what it woke up to. */
+    /**
+     * When the screen last came on; the intro plays if the home screen is what it woke up to. Some
+     * TVs keep the home screen resumed through standby, and the broadcast can arrive before or
+     * after onResume, so both places check.
+     */
     private var wokeAt = 0L
+    private var resumed = false
     private val screenOn = object : BroadcastReceiver() {
-        override fun onReceive(c: Context, i: Intent) { wokeAt = android.os.SystemClock.uptimeMillis() }
+        override fun onReceive(c: Context, i: Intent) {
+            if (resumed && prefs.intro == Prefs.INTRO_WAKE) playIntro()
+            else wokeAt = android.os.SystemClock.uptimeMillis()
+        }
     }
 
     /** Plays the boot animation over the home screen; [preview] is the one started from settings. */
@@ -884,6 +892,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         // Woken from standby onto the home screen.
         if (wokeAt > 0 && android.os.SystemClock.uptimeMillis() - wokeAt < 8_000 && prefs.intro == Prefs.INTRO_WAKE) playIntro()
         wokeAt = 0
+        resumed = true
         prefs.homeInFront = true
         HomeGuardService.onHomeResumed()
         restartIdle()
@@ -898,6 +907,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     override fun onPause() {
         // Leaving for another app (or standby) ends the intro rather than leaving it half played.
         intro?.finish()
+        resumed = false
         prefs.homeInFront = false
         main.removeCallbacks(idleFrame)
         main.removeCallbacks(ticker)
