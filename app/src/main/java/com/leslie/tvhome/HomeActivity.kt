@@ -48,6 +48,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     companion object {
         const val SHELF_SECONDS = 8
         private const val EXTRA_GUARD = "com.leslie.tvhome.GUARD"
+        private const val EXTRA_WAKE = "com.leslie.tvhome.WAKE"
 
         /**
          * How the home guard and the boot receiver bring the home screen back: the same task, with
@@ -211,22 +212,24 @@ class HomeActivity : Activity(), TileAdapter.Listener {
 
     // ------------------------------------------------------------------- intro
 
-    /**
-     * When the screen last came on; the intro plays if the home screen is what it woke up to. Some
-     * TVs keep the home screen resumed through standby, and the broadcast can arrive before or
-     * after onResume, so both places check.
+    /*
+     * Waking from standby works like a boot: the home screen comes to the front, whatever was open,
+     * and the intro plays. The broadcast can arrive before or after onResume, so both places check.
      */
-    private var wokeAt = 0L
     private var resumed = false
+    private var wakeIntro = false
     private val screenOn = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
-            if (resumed && prefs.intro == Prefs.INTRO_WAKE) playIntro()
-            else wokeAt = android.os.SystemClock.uptimeMillis()
+            if (prefs.intro != Prefs.INTRO_WAKE) return
+            if (resumed) { playIntro(wake = true); return }
+            wakeIntro = true
+            // The home app may start activities from the background.
+            startActivity(Intent(c, HomeActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(EXTRA_WAKE, true))
         }
     }
 
     /** Plays the boot animation over the home screen; [preview] is the one started from settings. */
-    fun playIntro(preview: Boolean = false) {
+    fun playIntro(preview: Boolean = false, wake: Boolean = false) {
         if (intro != null) return
         if (!preview) prefs.introBoot = Intro.bootStamp(this)
         sheets.toList().forEach { it.dismiss() }
@@ -234,7 +237,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         intro = Intro(this, root, scene, prefs.introSound) {
             intro = null
             if (sheets.isEmpty() && !control.isOpen) focusAt(focusedPos)
-        }.also { it.start() }
+        }.also { it.start(if (wake) prefs.wakeDelay.toLong() else 0) }
     }
 
     override fun onDestroy() {
@@ -865,6 +868,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (intent.getBooleanExtra(Intro.EXTRA_PREVIEW, false)) { playIntro(preview = true); return }
+        if (intent.getBooleanExtra(EXTRA_WAKE, false)) return  // onResume plays the intro
         // Home pressed while already home: close everything and go back to the top.
         sheets.toList().forEach { it.dismiss() }
         control.close()
@@ -889,9 +893,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         adapter.tvosFocus = prefs.focusTvos(this)
         applyClockStyle()
         control.applyStyle()
-        // Woken from standby onto the home screen.
-        if (wokeAt > 0 && android.os.SystemClock.uptimeMillis() - wokeAt < 8_000 && prefs.intro == Prefs.INTRO_WAKE) playIntro()
-        wokeAt = 0
+        if (wakeIntro) { wakeIntro = false; playIntro(wake = true) }
         resumed = true
         prefs.homeInFront = true
         HomeGuardService.onHomeResumed()

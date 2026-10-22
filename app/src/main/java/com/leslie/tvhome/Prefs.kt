@@ -166,6 +166,14 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("settings_bg", true)
         set(v) = sp.edit().putBoolean("settings_bg", v).apply()
 
+    /**
+     * How long the screen stays black on wake before the intro starts. Many panels (OLED especially)
+     * light up seconds after Android reports the screen on, and nothing tells the app when.
+     */
+    var wakeDelay: Int
+        get() = sp.getInt("wake_delay", 5000)
+        set(v) = sp.edit().putInt("wake_delay", v.coerceIn(0, 15_000)).apply()
+
     var introSound: Boolean
         get() = sp.getBoolean("intro_sound", true)
         set(v) = sp.edit().putBoolean("intro_sound", v).apply()
