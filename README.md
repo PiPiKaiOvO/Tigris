@@ -1,3 +1,6 @@
+> **本仓库是 [lesnolie/Tigris](https://github.com/lesnolie/Tigris) 的 fork**：回移到 Android 8.0
+> （API 26）并适配创维/酷开电视（7S710_A3）。改了什么、怎么装见 [COOCAA.md](COOCAA.md)。
+
 # Tigris
 
 把 Android TV 的桌面换成 tvOS 26 的样子：沉底的 Liquid Glass Dock、Top Shelf 式的顶部内容、毛玻璃控制中心、风景照片背景和相框屏保。
