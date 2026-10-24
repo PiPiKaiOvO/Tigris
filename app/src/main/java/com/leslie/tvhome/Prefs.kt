@@ -2,6 +2,7 @@ package com.leslie.tvhome
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.text.format.DateFormat
 
 /**
  * What the TV can afford. Low-end TVs (little memory, or Android 9/10, which ship on older chips)
@@ -19,7 +20,7 @@ object Device {
 }
 
 /** All user settings in one place. */
-class Prefs(ctx: Context) {
+class Prefs(private val ctx: Context) {
     private val sp: SharedPreferences = ctx.getSharedPreferences("tvhome", Context.MODE_PRIVATE)
 
     /** Show the default profile portrait beside the home-screen clock and controls. */
@@ -130,9 +131,9 @@ class Prefs(ctx: Context) {
         get() = sp.getStringSet("pinned_inputs", emptySet())!!.toSet()
         set(v) = sp.edit().putStringSet("pinned_inputs", v).apply()
 
-    /** 24-hour clock ("14:05") instead of "2:05 PM". */
+    /** 24-hour clock ("14:05") instead of "2:05 PM"; follows the system setting until changed here. */
     var clock24: Boolean
-        get() = sp.getBoolean("clock_24", false)
+        get() = if (sp.contains("clock_24")) sp.getBoolean("clock_24", false) else DateFormat.is24HourFormat(ctx)
         set(v) = sp.edit().putBoolean("clock_24", v).apply()
 
     /** [CLOCK_CORNER] (small, top right), [CLOCK_LARGE] (date and a large clock top left, as before v1.9) or [CLOCK_OFF]. */
