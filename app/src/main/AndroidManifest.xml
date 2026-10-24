@@ -12,17 +12,6 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
-    <uses-permission
-        android:name="android.permission.QUERY_ALL_PACKAGES"
-        tools:ignore="QueryAllPackagesPermission" />
-    <!-- Granted over adb (AGENTS.md step 4) or through local adb from 主屏幕设置, never asked on screen:
-         - WRITE_SECURE_SETTINGS: switch the home guard back on after the firmware switched it off,
-           keep ADB debugging on, keep the photo frame as the screensaver, Xiaomi backlight.
-         - SYSTEM_ALERT_WINDOW: Android's exemption for opening the home screen right after boot. -->
-    <uses-permission
-        android:name="android.permission.WRITE_SECURE_SETTINGS"
-        tools:ignore="ProtectedPermissions" />
-    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <application
         android:name=".App"
